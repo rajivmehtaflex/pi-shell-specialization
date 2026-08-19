@@ -23,6 +23,8 @@ export function createInitialLedger(options: InitialLedgerOptions): PhaseLedger 
       status: "pending",
       executionMode: options.mode,
       attempt: 0,
+      computeMode: definition.computeMode,
+      requiredGpuCount: definition.requiredGpuCount,
       estimatedCostUsd: definition.estimatedCostUsd,
       artifacts: [],
       artifactHashes: {},

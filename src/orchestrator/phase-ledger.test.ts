@@ -21,6 +21,16 @@ test("initial ledger contains every phase and dry-run mode", () => {
   assert.ok(ledger.phases.every((phase) => phase.status === "pending"));
 });
 
+test("ledger records dual-GPU topology only for AsyncGRPO", () => {
+  const ledger = createInitialLedger({ mode: "live" });
+  const grpo = ledger.phases.find((phase) => phase.id === "P2.6")!;
+  const sft = ledger.phases.find((phase) => phase.id === "P2.3")!;
+  assert.equal(grpo.computeMode, "dual-gpu-async-grpo");
+  assert.equal(grpo.requiredGpuCount, 2);
+  assert.equal(sft.computeMode, "single-gpu");
+  assert.equal(sft.requiredGpuCount, 1);
+});
+
 test("ledger marks phases working and done with checkpoints", () => {
   const ledger = createInitialLedger({ mode: "live", now: "2026-08-19T00:00:00Z" });
   const working = markPhaseWorking(ledger, "P2.0", { jobId: "modal-1", totalInputs: 10, now: "2026-08-19T00:01:00Z" });

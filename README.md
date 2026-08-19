@@ -79,7 +79,11 @@ Build the shell weakness profile from `results/imported.json`. Separate capabili
 Read the weakness profile and prepare a weakness-conditioned teacher prompt for Linux Bash 5/GNU. Target repeated word-splitting failures, but do not reveal hidden verifier details to the teacher task prompt.
 ```
 
-During development and local testing, explicitly tell Pi not to invoke Ollama or run model-generated scripts on the Mac. Real evaluation belongs in the external Linux sandbox/Modal workflow.
+During development and local testing, explicitly tell Pi not to invoke Ollama or run model-generated scripts on the Mac. Real evaluation belongs in the external Linux sandbox/SSH GPU workflow.
+
+## Remote environment setup
+
+Before completing the pending Pi/OpenEnv harness and external-GPU phases, follow [`docs/workflow-phase1-remote-setup.md`](docs/workflow-phase1-remote-setup.md). It adds the HF/GitHub/SSH/teacher/model gates, durable checkpoint handoff, Linux smoke-test procedure, and the explicit policy that Ollama is excluded from this flow.
 
 ## Scope
 
@@ -194,6 +198,113 @@ The extension registers:
 - `shell_benchmark_record_response` — record a response without executing it
 - `shell_benchmark_import_results` — validate external JSONL
 - `shell_benchmark_weakness_report` — generate a weakness report from external results
+- `shell_specialization_status` — read the durable phase ledger
+- `shell_specialization_run_next` — run the next dependency-ready phase
+- `shell_specialization_run_phase` — run one named phase through the orchestrator
+- `shell_specialization_resume` — recover stale phases and poll saved SSH jobs
+- `shell_specialization_cancel` — cancel a saved SSH job
+- `shell_specialization_dashboard` — render the phase table in Pi
+- `shell_specialization_artifacts` — list durable artifacts and hashes
+
+The orchestration surface is provider-neutral and SSH-based. It does not require Modal. The phase ledger records the compute topology: P2.6 article-style AsyncGRPO requires two GPUs, while teacher inference, SFT, evaluation, and final serving are sequential single-GPU phases.
+
+## Phase-by-phase Pi prompts
+
+Run these prompts after Pi has loaded the extension and the SSH runtime configuration is available. Start with `WORKFLOW_MODE=dry-run`; switch to `live` only after the one-prompt dry run passes.
+
+### Before starting: inspect the control plane
+
+```text
+Use `shell_specialization_status` and `shell_specialization_dashboard` to show the current phase ledger. Confirm the mode, SSH-backed runtime, artifact repository, and required GPU count for every phase. Do not start a job and do not use Ollama.
+```
+
+### P0 — baseline weakness profile
+
+```text
+Run phase P0 through the configured SSH phase command. Evaluate the base student on the Linux Bash 5/GNU diagnostic track, write the weakness profile and artifact manifest, and checkpoint the phase before launch and after completion. Do not execute generated scripts on this Mac and do not use Ollama.
+```
+
+### P2.0 — shell data foundation
+
+```text
+Run phase P2.0 after confirming P0 is done. Generate weakness-conditioned shell tasks from the persisted weakness profile, keep hidden verifier details private, validate the task schema, and checkpoint the generated prompt artifacts to the durable repository.
+```
+
+### P2.1 — teacher inference
+
+```text
+Run phase P2.1 through the configured llama.cpp teacher endpoint. Generate teacher solutions for the persisted shell tasks in resumable batches. Save the request IDs, batch cursor, raw responses, and checkpoint after every durable batch. Do not use Ollama and do not provide teacher assistance during future GRPO rollouts.
+```
+
+### P2.2 — teacher verification and dataset split
+
+```text
+Run phase P2.2. Verify teacher-generated Bash answers in the isolated Linux evaluator, reject unsafe or incorrect answers, remove duplicates and leakage, and create disjoint train/eval/holdout splits. Stop if the production dataset gate fails; do not silently continue with undersized data.
+```
+
+### P2.3 — QLoRA/SFT
+
+```text
+Run phase P2.3 on the verified dataset using the trainable student checkpoint and the configured QLoRA/SFT settings. The teacher must not be loaded as a live co-pilot. Record training metrics, checkpoint paths, hashes, and the remote job ID before returning.
+```
+
+### P2.4 — merge and publish SFT v0.1
+
+```text
+Run phase P2.4. Merge the verified SFT adapter into the student release artifact, validate tokenizer/config files, record the HF revision and hashes, and push only allowlisted model metadata and Git-LFS artifacts. Do not overwrite an existing release revision.
+```
+
+### P2.5 — base versus SFT evaluation
+
+```text
+Run phase P2.5 on the hidden holdout set. Compare the original base student with SFT v0.1 using the same Linux Bash 5/GNU tasks and verifier. Report category-level pass rates, failures, confidence intervals, and whether SFT clears the improvement gate. Do not start GRPO if the gate fails.
+```
+
+### P2.6 — two-GPU AsyncGRPO sharpening
+
+```text
+Prepare phase P2.6, but do not launch until the ledger and hardware check confirm requiredGpuCount=2. Use GPU 0 for the current student policy vLLM server and GPU 1 for the TRL AsyncGRPO trainer. Run the real Pi loop-owning harness through the transparent proxy, capture tool-turn traces, calculate reward only from hidden shell verification, and keep the teacher unavailable during rollouts. Stop if two suitable GPUs are not visible.
+```
+
+### P2.6b — merge and publish GRPO v0.2
+
+```text
+Run phase P2.6b only after GRPO finishes with nonzero reward variance, no reward collapse, and an improvement over the SFT checkpoint. Merge/export v0.2, record the pinned HF revision and hashes, and preserve SFT v0.1 as the fallback release.
+```
+
+### P2.7 — final serving smoke test
+
+```text
+Run phase P2.7 using the final student release. Serve it through the configured vLLM or llama.cpp deployment, verify the OpenAI-compatible endpoint, test the target context configuration, and record health/model/tool-call smoke results. This phase normally requires one GPU, not two.
+```
+
+### P2.8 — final Pi provider/export
+
+```text
+Run phase P2.8. Configure Pi to use the pinned final student endpoint, verify that the pi-shell-specialization extension loads, run one safe shell-coding smoke prompt in the external Linux sandbox, and publish the final deployment manifest. Do not run model-generated shell code on this Mac.
+```
+
+### Resume after SSH machine loss
+
+```text
+The SSH machine was replaced. Run `shell_specialization_resume`, pull the durable ledger and artifact manifest, verify all recorded hashes, poll any saved SSH job IDs, convert stale phases to interrupted when necessary, and show me the exact next safe action. Do not rerun completed batches.
+```
+
+### Inspect artifacts and stop a job
+
+```text
+Use `shell_specialization_artifacts` to list every durable artifact, phase, and SHA-256 hash. Then show the phase dashboard and identify any phase whose local state has not been pushed.
+```
+
+```text
+Cancel the remote job for phase P2.1, mark it interrupted with the reason, preserve its batch cursor and raw artifacts, and show the resume command. Do not delete the persisted data.
+```
+
+### Final safety rule
+
+```text
+For every phase, persist state before launch, after remote job registration, after each durable batch, and after the completion gate. A phase is not done until its ledger, manifest, artifacts, and checkpoint commit are pushed. Never use Ollama.
+```
 
 ## Training handoff
 
