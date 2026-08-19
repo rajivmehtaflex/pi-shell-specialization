@@ -1,0 +1,23 @@
+{
+  "name": "pi-shell-specialization",
+  "version": "0.1.0",
+  "description": "Pi-orchestrated shell-specialization workflow with weakness diagnosis, teacher data, and resumable phases",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "validate": "node dist/src/cli.js validate",
+    "questions": "node dist/src/cli.js questions --public",
+    "export-bundle": "node dist/src/cli.js export-bundle --out results/bundle"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}

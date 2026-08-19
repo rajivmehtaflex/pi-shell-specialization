@@ -1,0 +1,422 @@
+[
+  {
+    "id": "bash-001",
+    "category": "Bash syntax and script structure",
+    "difficulty": "easy",
+    "prompt": "Write a script that prints the numbers 1 through 5, one per line, using a Bash loop, and saves that exact output to $TEST_ROOT/output.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 1
+  },
+  {
+    "id": "bash-002",
+    "category": "Bash syntax and script structure",
+    "difficulty": "easy",
+    "prompt": "Write a script that accepts two positional arguments and writes their integer sum to $TEST_ROOT/sum.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 2
+  },
+  {
+    "id": "bash-003",
+    "category": "Bash syntax and script structure",
+    "difficulty": "easy",
+    "prompt": "Write a script with a function named greet that writes `hello <name>` to $TEST_ROOT/greeting.txt for the name in $NAME.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 3
+  },
+  {
+    "id": "bash-004",
+    "category": "Bash syntax and script structure",
+    "difficulty": "easy",
+    "prompt": "Write a script that uses a Bash case statement to map $COLOR=green to the word go in $TEST_ROOT/result.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 4
+  },
+  {
+    "id": "bash-005",
+    "category": "Bash syntax and script structure",
+    "difficulty": "medium",
+    "prompt": "Write a script that reads lines from $TEST_ROOT/numbers.txt and writes their numeric total to $TEST_ROOT/total.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 5
+  },
+  {
+    "id": "bash-006",
+    "category": "Bash syntax and script structure",
+    "difficulty": "medium",
+    "prompt": "Write a script that creates a small configuration file at $TEST_ROOT/config.ini using a quoted heredoc with the literal value $HOME.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 6
+  },
+  {
+    "id": "quote-001",
+    "category": "Quoting, expansion, globbing, and arrays",
+    "difficulty": "easy",
+    "prompt": "Copy the file whose name is stored in $INPUT_FILE to $TEST_ROOT/copied.txt. The name contains spaces.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 7
+  },
+  {
+    "id": "quote-002",
+    "category": "Quoting, expansion, globbing, and arrays",
+    "difficulty": "medium",
+    "prompt": "List the literal filenames matching the pattern stored in $PATTERN without allowing the shell to expand the pattern before grep sees it.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 8
+  },
+  {
+    "id": "quote-003",
+    "category": "Quoting, expansion, globbing, and arrays",
+    "difficulty": "easy",
+    "prompt": "Write the value of $OPTION to $TEST_ROOT/option.txt. If it is unset or empty, write the word default.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 9
+  },
+  {
+    "id": "quote-004",
+    "category": "Quoting, expansion, globbing, and arrays",
+    "difficulty": "hard",
+    "prompt": "Define a Bash array FILES containing `one`, `two words`, and `three\\nlines`; write each exact array element to $TEST_ROOT/list.txt without splitting elements.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 10
+  },
+  {
+    "id": "quote-005",
+    "category": "Quoting, expansion, globbing, and arrays",
+    "difficulty": "hard",
+    "prompt": "Use the value in $UNTRUSTED as data and write it to $TEST_ROOT/value.txt. The value contains `; touch $TEST_ROOT/injected` and must not execute.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 11
+  },
+  {
+    "id": "quote-006",
+    "category": "Quoting, expansion, globbing, and arrays",
+    "difficulty": "medium",
+    "prompt": "Define a Bash array containing `a` and `two words`; append the suffix .bak to each item and write the resulting names, one per line, to $TEST_ROOT/renamed.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 12
+  },
+  {
+    "id": "file-001",
+    "category": "Files, paths, permissions, and text processing",
+    "difficulty": "medium",
+    "prompt": "Copy every .txt file from $TEST_ROOT/source into $TEST_ROOT/dest, preserving filenames with spaces and leaving unrelated files alone.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 13
+  },
+  {
+    "id": "file-002",
+    "category": "Files, paths, permissions, and text processing",
+    "difficulty": "easy",
+    "prompt": "Create $TEST_ROOT/executable.sh with executable permissions and the content `printf ok`.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 14
+  },
+  {
+    "id": "file-003",
+    "category": "Files, paths, permissions, and text processing",
+    "difficulty": "medium",
+    "prompt": "Find regular files below $TEST_ROOT/tree and write their relative paths, sorted, to $TEST_ROOT/files.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 15
+  },
+  {
+    "id": "file-004",
+    "category": "Files, paths, permissions, and text processing",
+    "difficulty": "medium",
+    "prompt": "Convert the first CSV column from $TEST_ROOT/data.csv to uppercase and write the result to $TEST_ROOT/upper.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 16
+  },
+  {
+    "id": "file-005",
+    "category": "Files, paths, permissions, and text processing",
+    "difficulty": "hard",
+    "prompt": "Create a temporary working file under $TEST_ROOT, use it to reverse the lines in $TEST_ROOT/input.txt, and leave no temporary file behind.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 17
+  },
+  {
+    "id": "file-006",
+    "category": "Files, paths, permissions, and text processing",
+    "difficulty": "hard",
+    "prompt": "From any current directory, write the repository-relative path of $TEST_ROOT/input.txt to $TEST_ROOT/path.txt without hardcoding the absolute temp path.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 18
+  },
+  {
+    "id": "pipe-001",
+    "category": "Pipelines, streams, and command substitution",
+    "difficulty": "medium",
+    "prompt": "Run a pipeline that reads $TEST_ROOT/input.txt and writes its uppercase contents to $TEST_ROOT/output.txt, while failing if any pipeline stage fails.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 19
+  },
+  {
+    "id": "pipe-002",
+    "category": "Pipelines, streams, and command substitution",
+    "difficulty": "medium",
+    "prompt": "Write the same normalized input to both $TEST_ROOT/output.txt and $TEST_ROOT/audit.txt using one stream.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 20
+  },
+  {
+    "id": "pipe-003",
+    "category": "Pipelines, streams, and command substitution",
+    "difficulty": "hard",
+    "prompt": "Read $TEST_ROOT/input.txt with a while-read loop and preserve the final line even when it has no trailing newline.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 21
+  },
+  {
+    "id": "pipe-004",
+    "category": "Pipelines, streams, and command substitution",
+    "difficulty": "hard",
+    "prompt": "Capture the multi-line output of a command substitution into $TEST_ROOT/captured.txt without losing internal newlines.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 22
+  },
+  {
+    "id": "pipe-005",
+    "category": "Pipelines, streams, and command substitution",
+    "difficulty": "easy",
+    "prompt": "Sort unique non-empty lines from $TEST_ROOT/input.txt and write them to $TEST_ROOT/unique.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 23
+  },
+  {
+    "id": "pipe-006",
+    "category": "Pipelines, streams, and command substitution",
+    "difficulty": "hard",
+    "prompt": "Use a process substitution or an equivalent safe method to compare the sorted contents of $TEST_ROOT/left.txt and $TEST_ROOT/right.txt, writing equal or different to $TEST_ROOT/result.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 24
+  },
+  {
+    "id": "error-001",
+    "category": "Error handling, traps, cleanup, and idempotence",
+    "difficulty": "medium",
+    "prompt": "Create $TEST_ROOT/temporary.txt, install a trap, and ensure it is removed when the script exits normally.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 25
+  },
+  {
+    "id": "error-002",
+    "category": "Error handling, traps, cleanup, and idempotence",
+    "difficulty": "medium",
+    "prompt": "Use strict mode appropriately and write the default value `missing` when $OPTION is unset.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 26
+  },
+  {
+    "id": "error-003",
+    "category": "Error handling, traps, cleanup, and idempotence",
+    "difficulty": "hard",
+    "prompt": "Retry a command up to three times using the counter in $TEST_ROOT/attempts, succeeding on the third attempt and writing success to $TEST_ROOT/result.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 27
+  },
+  {
+    "id": "error-004",
+    "category": "Error handling, traps, cleanup, and idempotence",
+    "difficulty": "medium",
+    "prompt": "Create $TEST_ROOT/cache exactly once, write a one-time marker containing 1, and make the script safe to run twice.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 28
+  },
+  {
+    "id": "error-005",
+    "category": "Error handling, traps, cleanup, and idempotence",
+    "difficulty": "hard",
+    "prompt": "Write a lock-protected result so two concurrent invocations do not corrupt $TEST_ROOT/result.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 29
+  },
+  {
+    "id": "error-006",
+    "category": "Error handling, traps, cleanup, and idempotence",
+    "difficulty": "hard",
+    "prompt": "Run a child operation that fails, clean up temporary state, and return a nonzero exit code without hiding the failure.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 30
+  },
+  {
+    "id": "safe-001",
+    "category": "Security and command-injection resistance",
+    "difficulty": "easy",
+    "prompt": "Use $NAME only as data in a greeting; the value may contain shell metacharacters and must be written literally.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 31
+  },
+  {
+    "id": "safe-002",
+    "category": "Security and command-injection resistance",
+    "difficulty": "hard",
+    "prompt": "Delete only the file named by $TARGET inside $TEST_ROOT, rejecting absolute paths and path traversal.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 32
+  },
+  {
+    "id": "safe-003",
+    "category": "Security and command-injection resistance",
+    "difficulty": "hard",
+    "prompt": "Read configuration data from $TEST_ROOT/untrusted.conf without sourcing or executing it, and copy its text to $TEST_ROOT/copied.conf.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 33
+  },
+  {
+    "id": "safe-004",
+    "category": "Security and command-injection resistance",
+    "difficulty": "medium",
+    "prompt": "Create a temporary file safely inside $TEST_ROOT with a unique name, write `ok` to it, and record its path in $TEST_ROOT/temp_path; do not use a predictable global /tmp filename.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 34
+  },
+  {
+    "id": "safe-005",
+    "category": "Security and command-injection resistance",
+    "difficulty": "hard",
+    "prompt": "Run only a command selected from the allowlist `date`, `printf`, or `true` in $COMMAND; reject every other value.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 35
+  },
+  {
+    "id": "safe-006",
+    "category": "Security and command-injection resistance",
+    "difficulty": "medium",
+    "prompt": "Validate that $PORT is an integer between 1 and 65535 without invoking a shell or network client, writing valid or invalid to $TEST_ROOT/result.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 36
+  },
+  {
+    "id": "debug-001",
+    "category": "Debugging and repairing broken scripts",
+    "difficulty": "medium",
+    "prompt": "Repair this script so a filename containing spaces is copied correctly: `for f in $(find . -type f); do cp $f out/; done`. Use the fixture files and produce the copied files.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 37
+  },
+  {
+    "id": "debug-002",
+    "category": "Debugging and repairing broken scripts",
+    "difficulty": "medium",
+    "prompt": "Repair a pipeline so failure is detected: `grep needle missing.txt | wc -l` must cause a nonzero script status and write no success marker.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 38
+  },
+  {
+    "id": "debug-003",
+    "category": "Debugging and repairing broken scripts",
+    "difficulty": "easy",
+    "prompt": "Repair an unset-variable bug in `echo \"$OPTION\"` by providing a safe default and writing it to $TEST_ROOT/result.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 39
+  },
+  {
+    "id": "debug-004",
+    "category": "Debugging and repairing broken scripts",
+    "difficulty": "hard",
+    "prompt": "Repair a partial-output bug: write the transformed result to a temporary file first and replace $TEST_ROOT/result.txt only if the transform succeeds.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 40
+  },
+  {
+    "id": "debug-005",
+    "category": "Debugging and repairing broken scripts",
+    "difficulty": "medium",
+    "prompt": "Diagnose a missing-command failure and write a clear error to stderr while returning nonzero; do not create $TEST_ROOT/success.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 41
+  },
+  {
+    "id": "debug-006",
+    "category": "Debugging and repairing broken scripts",
+    "difficulty": "hard",
+    "prompt": "Repair a script that overwrites an existing file: create a backup before replacing $TEST_ROOT/config.txt and preserve the original content in $TEST_ROOT/config.txt.bak.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 42
+  },
+  {
+    "id": "agent-001",
+    "category": "Multi-step Pi terminal workflows",
+    "difficulty": "medium",
+    "prompt": "Inspect the files available in $TEST_ROOT, then write a script that converts the discovered .data file to .out without hardcoding its filename.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 43
+  },
+  {
+    "id": "agent-002",
+    "category": "Multi-step Pi terminal workflows",
+    "difficulty": "medium",
+    "prompt": "Use the available terminal context to inspect manifest.txt and generate a script that writes its declared name and version to metadata.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 44
+  },
+  {
+    "id": "agent-003",
+    "category": "Multi-step Pi terminal workflows",
+    "difficulty": "hard",
+    "prompt": "Create a script that checks all files under $TEST_ROOT/input before processing them, refuses to proceed if any file is empty, and writes the processed result to $TEST_ROOT/processed.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 45
+  },
+  {
+    "id": "agent-004",
+    "category": "Multi-step Pi terminal workflows",
+    "difficulty": "medium",
+    "prompt": "Generate a repeatable backup workflow: inspect source.txt, create source.txt.bak, and verify the backup matches before reporting success.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 46
+  },
+  {
+    "id": "agent-005",
+    "category": "Multi-step Pi terminal workflows",
+    "difficulty": "hard",
+    "prompt": "Use terminal inspection to discover whether jq is available; generate a script that parses input.json with jq when available and otherwise exits with a clear diagnostic.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 47
+  },
+  {
+    "id": "agent-006",
+    "category": "Multi-step Pi terminal workflows",
+    "difficulty": "medium",
+    "prompt": "Work through a multi-step release check: inspect version.txt, validate that it matches v<major>.<minor>, and write release-ready or rejected to result.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 48
+  },
+  {
+    "id": "bash-007",
+    "category": "Bash syntax and script structure",
+    "difficulty": "medium",
+    "prompt": "Read numbers.txt and write the largest integer to max.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 49
+  },
+  {
+    "id": "bash-008",
+    "category": "Bash syntax and script structure",
+    "difficulty": "hard",
+    "prompt": "Use a quoted heredoc to write the literal two lines `home=$HOME` and `dollar=$5` to config.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 50
+  },
+  {
+    "id": "quote-007",
+    "category": "Quoting, expansion, globbing, and arrays",
+    "difficulty": "easy",
+    "prompt": "Print the value of PATH as one line without word splitting or glob expansion.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 51
+  },
+  {
+    "id": "quote-008",
+    "category": "Quoting, expansion, globbing, and arrays",
+    "difficulty": "medium",
+    "prompt": "Create an array containing `alpha`, `two words`, and `three words`, then write exactly three lines to items.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 52
+  },
+  {
+    "id": "file-007",
+    "category": "Files, paths, permissions, and text processing",
+    "difficulty": "hard",
+    "prompt": "Find all .log files under logs and write their relative paths sorted to logs.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 53
+  },
+  {
+    "id": "file-008",
+    "category": "Files, paths, permissions, and text processing",
+    "difficulty": "medium",
+    "prompt": "Replace every COLOR token with COLOUR in notes.txt in place using macOS BSD sed semantics.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 54
+  },
+  {
+    "id": "pipe-007",
+    "category": "Pipelines, streams, and command substitution",
+    "difficulty": "medium",
+    "prompt": "Prefix each line of input.txt with its 1-based line number as `<n>:<line>` and write numbered.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 55
+  },
+  {
+    "id": "pipe-008",
+    "category": "Pipelines, streams, and command substitution",
+    "difficulty": "easy",
+    "prompt": "Write sorted unique non-empty lines from input.txt to unique.txt.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 56
+  },
+  {
+    "id": "error-007",
+    "category": "Error handling, traps, cleanup, and idempotence",
+    "difficulty": "medium",
+    "prompt": "Require exactly one argument; with zero arguments print a usage message to stderr and exit 2.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 57
+  },
+  {
+    "id": "safe-007",
+    "category": "Security and command-injection resistance",
+    "difficulty": "medium",
+    "prompt": "Copy untrusted.txt to copied.txt as data; never source or execute its contents.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 58
+  },
+  {
+    "id": "debug-007",
+    "category": "Debugging and repairing broken scripts",
+    "difficulty": "medium",
+    "prompt": "Repair an unquoted filename expansion so `my file.txt` is copied to copied.txt without word splitting.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 59
+  },
+  {
+    "id": "agent-007",
+    "category": "Multi-step Pi terminal workflows",
+    "difficulty": "medium",
+    "prompt": "Inspect input files and sum all .entry integer files into total.txt without hardcoding their names.\n\nTarget environment: Linux Bash 5.x with GNU userland. Return exactly one Bash script in a single `bash` fenced code block. Use $TEST_ROOT for all files and do not use the network.",
+    "sequence": 60
+  }
+]

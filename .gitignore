@@ -1,0 +1,12 @@
+dist/
+node_modules/
+npm-debug.log*
+*.jsonl
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+__pycache__/
+.pytest_cache/
+tmp/
