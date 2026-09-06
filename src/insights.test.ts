@@ -119,3 +119,18 @@ test("a later pass after a protocol-failed first attempt cannot push pass@N abov
   assert.equal(insight.passAtN, 1);
   assert.equal(insight.protocolFailures, 1);
 });
+
+test("difficulty attempts count every attempt of that difficulty's cases", () => {
+  const profile = buildWeaknessProfile([
+    record("bash-001", false, "```bash\nfalse\n```", 1),
+    record("bash-001", false, "```bash\nfalse\n```", 2),
+    record("bash-001", true, "```bash\ntrue\n```", 3),
+    record("bash-002", true, "```bash\ntrue\n```", 1),
+  ], { model: "m", track: "raw" });
+  const buckets = Object.values(profile.categories[0].byDifficulty);
+  const attempted = buckets.find((bucket) => bucket.attempts > bucket.cases);
+  assert.ok(attempted, "expected a difficulty bucket where attempts exceed cases");
+  // bash-001 and bash-002 are both easy: 2 cases, 4 total attempts (3 for bash-001, 1 for bash-002)
+  assert.equal(attempted.cases, 2);
+  assert.equal(attempted.attempts, 4);
+});

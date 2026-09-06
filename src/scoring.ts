@@ -35,7 +35,7 @@ export function scoreCase(item: DiagnosticCase, response: string, execution: Exe
   if (execution.status === "timed-out") failureLabels.add("timeout");
   if (execution.status === "sandbox-unavailable") failureLabels.add("sandbox");
   for (const finding of execution.findings) failureLabels.add(finding.label);
-  if (execution.status !== "passed" && execution.status !== "sandbox-unavailable") {
+  if (execution.status === "failed" || execution.status === "timed-out") {
     for (const label of item.failureLabels) failureLabels.add(label);
   }
   return { total, dimensions, failureLabels: [...failureLabels], passed: total === 100 };

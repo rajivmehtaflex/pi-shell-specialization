@@ -218,14 +218,22 @@ export function buildWeaknessProfile(records: ExternalAttemptRecord[], options: 
       all.filter((attempt) => attempt.record.case_id === caseId && attempt.capabilityFailure).length >= 2,
     );
     const byDifficulty: Record<string, DifficultyInsight> = {};
+    const difficultyCases = new Map<string, Set<string>>();
     for (const attempt of capability) {
       const key = attempt.item.difficulty;
       const current = byDifficulty[key] ?? { cases: 0, attempts: 0, passRate: 0, averageScore: 0 };
       current.cases += 1;
-      current.attempts += 1;
       current.passRate += attempt.score.passed ? 1 : 0;
       current.averageScore += attempt.score.total;
       byDifficulty[key] = current;
+      const ids = difficultyCases.get(key) ?? new Set<string>();
+      ids.add(attempt.record.case_id);
+      difficultyCases.set(key, ids);
+    }
+    for (const attempt of all) {
+      if (difficultyCases.get(attempt.item.difficulty)?.has(attempt.record.case_id)) {
+        byDifficulty[attempt.item.difficulty].attempts += 1;
+      }
     }
     for (const value of Object.values(byDifficulty)) {
       value.passRate = rate(value.passRate, value.cases);
