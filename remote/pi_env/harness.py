@@ -157,7 +157,7 @@ def build_envelope_row(task: PiTask, config: PiConfig, response: str, verificati
         "task_id": task.task_id,
         "task": {
             "prompt": task.prompt,
-            "setup_files": dict(task.setup_files),
+            "setupFiles": dict(task.setup_files),
             "environment": dict(task.environment),
             "checks": [dict(check) for check in task.checks],
         },

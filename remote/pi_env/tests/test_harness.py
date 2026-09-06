@@ -174,7 +174,7 @@ class HarnessRunTests(unittest.TestCase):
             "attempt": 1,
         })
         self.assertEqual(outcome.envelope["task"]["prompt"], "copy hello.txt to done.txt")
-        self.assertEqual(outcome.envelope["task"]["setup_files"], {"hello.txt": "hi\n"})
+        self.assertEqual(outcome.envelope["task"]["setupFiles"], {"hello.txt": "hi\n"})
         self.assertEqual(outcome.envelope["task_id"], "task-001")
         self.assertEqual(len(outcome.trace), 1)
         self.assertEqual(outcome.aux_trace, [])
