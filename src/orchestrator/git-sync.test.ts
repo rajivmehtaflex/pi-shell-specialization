@@ -4,17 +4,71 @@ import { createInitialLedger, markPhaseWorking } from "./phase-ledger.ts";
 import { HfGitSync, assertCommitPaths, type CommandRunner } from "./git-sync.ts";
 import { CheckpointCommitter } from "./checkpoint-commit.ts";
 
-test("commit path policy allows state/data/LFS metadata and rejects secrets", () => {
+test("commit path policy allows artifact roots and rejects everything else", () => {
   assert.doesNotThrow(() => assertCommitPaths([
     "state/phase-ledger.json",
     "data/teacher_verified.jsonl",
     "artifacts/report.json",
-    "model.safetensors",
+    "artifacts/model.safetensors",
     "runs/sft-v1/job.json",
   ]));
-  assert.throws(() => assertCommitPaths([".env"]), /blocked|secret/i);
-  assert.throws(() => assertCommitPaths(["../outside.txt"]), /path/i);
-  assert.throws(() => assertCommitPaths(["node_modules/x.js"]), /blocked/i);
+  assert.throws(() => assertCommitPaths([".env"]), /secret/i);
+  assert.throws(() => assertCommitPaths(["../outside.txt"]), /traversal/);
+  assert.throws(() => assertCommitPaths(["state/node_modules/x.js"]), /blocked/);
+});
+
+test("commit path allowlist rejects secrets in any directory with rule-naming messages", () => {
+  for (const [path, rule] of [
+    [".env", /secret files are never committed/],
+    ["state/.env.local", /secret files are never committed/],
+    ["secrets/id_rsa", /id_rsa/],
+    ["artifacts/server.pem", /\.pem/],
+    ["runs/tls.key", /\.key/],
+    ["data/credentials.json", /credentials/],
+    ["state/cert.p12", /\.p12/],
+  ] as const) {
+    assert.throws(() => assertCommitPaths([path]), rule, path);
+    assert.throws(() => assertCommitPaths([path]), new RegExp(path.replace(/\./g, "\\.")), `message must name the path: ${path}`);
+  }
+});
+
+test("commit path allowlist rejects non-artifact paths with rule-naming messages", () => {
+  for (const [path, rule] of [
+    ["../outside", /traversal/],
+    ["/abs/path", /absolute/],
+    ["README.md", /repo-root-level/],
+    ["docs/notes.md", /outside the committable artifact roots/],
+    ["runs/../../escape", /traversal/],
+  ] as const) {
+    assert.throws(() => assertCommitPaths([path]), rule, path);
+    assert.throws(() => assertCommitPaths([path]), new RegExp(path.replace(/\./g, "\\.")), `message must name the path: ${path}`);
+  }
+  assert.throws(() => assertCommitPaths(["state\\windows.json"]), /POSIX/);
+  assert.throws(() => assertCommitPaths([""]), /empty/);
+});
+
+test("a legit multi-path checkpoint commit still succeeds", async () => {
+  const calls: string[][] = [];
+  const runner: CommandRunner = {
+    async run(command, args) {
+      calls.push([command, ...args]);
+      if (args[0] === "rev-parse") return { code: 0, stdout: "def456\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const sync = new HfGitSync({ root: "/tmp/shell-specialization", runner });
+  const phase = markPhaseWorking(createInitialLedger({ mode: "live" }), "P2.2");
+  const commit = await sync.commitPhase(
+    phase,
+    ["state/phase-ledger.json", "data/teacher_train.jsonl", "runs/P2.2/result.json", "artifacts/audit.json"],
+    "phase(P2.2): complete",
+  );
+  assert.equal(commit, "def456");
+  const addCall = calls.find((call) => call[0] === "git" && call[1] === "add");
+  assert.ok(addCall);
+  assert.ok(addCall.includes("state/phase-ledger.json"));
+  assert.ok(addCall.includes("runs/P2.2/result.json"));
+  assert.ok(calls.some((call) => call[0] === "git" && call[1] === "commit"));
 });
 
 test("HF sync preflight and checkpoint use the expected commands", async () => {

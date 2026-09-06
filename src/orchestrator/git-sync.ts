@@ -28,12 +28,44 @@ const systemRunner: CommandRunner = {
 
 const BLOCKED_PARTS = new Set([".git", "node_modules", "dist", ".venv", "__pycache__"]);
 
+/**
+ * Artifact roots (repo-relative, POSIX separators) that checkpoint commits may
+ * touch (T6.2). The allowlist is the primary defense; the blocklist below is
+ * kept as defense in depth.
+ */
+export const COMMITTABLE_ROOTS: readonly string[] = ["state", "data", "artifacts", "runs"];
+
+const SECRET_PATH_PATTERNS: Array<{ rule: string; pattern: RegExp }> = [
+  { rule: ".env* secret files are never committed in any directory", pattern: /(?:^|\/)\.env/i },
+  { rule: "credentials* files are never committed in any directory", pattern: /(?:^|\/)credentials/i },
+  { rule: "*.pem key material is never committed", pattern: /\.pem$/i },
+  { rule: "*.key key material is never committed", pattern: /\.key$/i },
+  { rule: "id_rsa* private keys are never committed", pattern: /(?:^|\/)id_rsa/i },
+  { rule: "*.p12 key bundles are never committed", pattern: /\.p12$/i },
+];
+
+function reject(path: string, rule: string): never {
+  throw new Error(`rejected commit path "${path}": ${rule}`);
+}
+
 export function assertCommitPaths(paths: string[]): void {
   for (const path of paths) {
-    if (!path || path.startsWith("/") || path.split("/").includes("..")) throw new Error(`invalid commit path: ${path}`);
+    if (!path) reject(path, "empty commit paths are not allowed");
+    if (path.startsWith("/")) reject(path, "absolute paths are not allowed; use repo-relative POSIX paths");
+    if (path.includes("\\")) reject(path, "backslash separators are not allowed; use repo-relative POSIX paths");
+    if (path.split("/").includes("..")) reject(path, `path traversal via ".." segments is not allowed`);
+    for (const { rule, pattern } of SECRET_PATH_PATTERNS) {
+      if (pattern.test(path)) reject(path, rule);
+    }
     const parts = path.split("/");
-    if (parts.some((part) => BLOCKED_PARTS.has(part)) || path === ".env" || path.endsWith("/.env") || /(?:^|\/)(?:.*\.pem|.*\.key|credentials\.json)$/.test(path)) {
-      throw new Error(`blocked commit path: ${path}`);
+    if (parts.length < 2) {
+      reject(path, "repo-root-level files are never committed; place artifacts under state/, data/, artifacts/, or runs/");
+    }
+    if (!COMMITTABLE_ROOTS.includes(parts[0])) {
+      reject(path, "path is outside the committable artifact roots (state/, data/, artifacts/, runs/); explicitly allow nothing else");
+    }
+    if (parts.some((part) => BLOCKED_PARTS.has(part))) {
+      reject(path, `blocked directory in path (${[...BLOCKED_PARTS].join(", ")})`);
     }
   }
 }
