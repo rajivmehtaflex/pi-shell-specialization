@@ -5,14 +5,18 @@ import json
 from pathlib import Path
 from typing import Any
 
+from workers.contracts import compute_record_hash
+
 
 def audit(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     seen: set[str] = set()
+    seen_content: set[str] = set()
     for row in rows:
         task = row.get("task", row)
-        task_id = str(row.get("task_id", task.get("id", "")))
+        task_id = str(row.get("task_id", task.get("id", "") if isinstance(task, dict) else ""))
+        content_hash = compute_record_hash(row)
         reason = None
         if not task_id:
             reason = "missing task id"
@@ -20,12 +24,19 @@ def audit(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, A
             reason = "duplicate task id"
         elif row.get("verification") not in {"passed", True}:
             reason = "teacher answer not verified"
-        elif task.get("verifierSpec") and task.get("verifierSpec") in str(task.get("prompt", "")):
+        elif isinstance(task, dict) and task.get("verifierSpec") and task.get("verifierSpec") in str(task.get("prompt", "")):
             reason = "verifier leaked into public prompt"
+        elif not isinstance(row.get("response"), str) or not row.get("response", "").strip():
+            reason = "missing or empty response"
+        elif not isinstance(task, dict) or not str(task.get("prompt", "")).strip():
+            reason = "missing task content"
+        elif content_hash in seen_content:
+            reason = "duplicate canonical content"
         if reason:
             rejected.append({"task_id": task_id, "reason": reason})
         else:
             seen.add(task_id)
+            seen_content.add(content_hash)
             accepted.append(row)
     report = {"input": len(rows), "accepted": len(accepted), "rejected": len(rejected), "rejections": rejected}
     return accepted, report
