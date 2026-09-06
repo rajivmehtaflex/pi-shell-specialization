@@ -1,8 +1,38 @@
+"""Verified-response worker with an explicit verifier/workspace isolation layout.
+
+Every run gets a throwaway temp root with exactly two children, mirroring the
+TS sandbox contract (commit 9da5b77, ``src/sandbox.ts``):
+
+  root/workspace/  -- the candidate's entire universe: setup files, the
+                      candidate script itself, ``home/`` and ``tmp/``. The
+                      candidate runs with cwd, HOME, TEST_ROOT and TMPDIR all
+                      pinned inside this tree.
+  root/verifier/   -- verifier-owned assets, outside the workspace and never
+                      exposed to the candidate.
+
+Isolation guarantee: verification here is in-process Python (``_check`` runs in
+the worker process), so the verifier is code rather than files and cannot be
+read or altered by the candidate -- the contract is satisfied trivially. It is
+also enforced structurally:
+
+  * checks may only touch explicit paths that resolve inside the workspace
+    (``_safe_relative``); a file-path check target that escapes the workspace
+    is an evaluator-config rejection (``failureLabels: ["evaluator"]``), never
+    an accidental read or existence probe outside the candidate's universe;
+  * the workspace tree is the only tree a candidate can meaningfully
+    influence, and nothing under ``root/verifier/`` is reachable through it.
+
+External-evaluator boundary: this in-process layout is a dev-host convenience.
+Production runs require the bubblewrap/Linux sandbox (see ``src/sandbox.ts``
+and ``docs/workflow-phase1-remote-setup.md``) where ``root/workspace`` is the
+only read-write mount and ``root/verifier`` is mounted read-only at
+``/verifier``.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import tempfile
@@ -11,6 +41,9 @@ from pathlib import Path
 from typing import Any
 
 from workers.contracts import TRACKS, compute_record_hash
+
+WORKSPACE_DIRNAME = "workspace"
+VERIFIER_DIRNAME = "verifier"
 
 PROVENANCE_KEYS = ("session_id", "model", "provider", "track", "attempt")
 
@@ -40,23 +73,45 @@ def safety_labels(script: str) -> list[str]:
 def _safe_relative(root: Path, relative: str) -> Path:
     candidate = (root / relative).resolve()
     if candidate != root and root not in candidate.parents:
-        raise ValueError(f"path escapes TEST_ROOT: {relative}")
+        raise ValueError(f"path escapes TEST_ROOT workspace: {relative}")
     return candidate
 
 
-def _write_setup(root: Path, task: dict[str, Any]) -> None:
+def _prepare_layout(root: Path) -> tuple[Path, Path]:
+    """Create the isolated run layout: root/workspace (candidate universe) and root/verifier.
+
+    The workspace tree is the only candidate-visible tree; the verifier tree
+    lives beside it, outside the universe, mirroring the TS sandbox mounts.
+    """
+    workspace = root / WORKSPACE_DIRNAME
+    verifier = root / VERIFIER_DIRNAME
+    (workspace / "home").mkdir(parents=True)
+    (workspace / "tmp").mkdir()
+    verifier.mkdir()
+    return workspace, verifier
+
+
+def _write_setup(workspace: Path, task: dict[str, Any]) -> None:
     for relative, content in task.get("setupFiles", {}).items():
-        path = _safe_relative(root, relative)
+        path = _safe_relative(workspace, relative)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(content), encoding="utf-8")
 
 
-def _read_file(root: Path, relative: str) -> str:
-    path = _safe_relative(root, relative)
+def _read_file(workspace: Path, relative: str) -> str:
+    path = _safe_relative(workspace, relative)
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-def _check(check: dict[str, Any], root: Path, stdout: str, exit_code: int) -> bool:
+def _check(check: dict[str, Any], workspace: Path, stdout: str, exit_code: int) -> bool:
+    """Evaluate one check against the candidate's workspace.
+
+    Every file-path target is resolved through ``_safe_relative``: a check that
+    points outside the workspace raises, which surfaces as an evaluator-config
+    rejection (``failureLabels: ["evaluator"]``). Checks can never read outside
+    the candidate's universe -- not even accidentally via ``../`` or absolute
+    paths.
+    """
     check_type = check.get("type")
     value = check.get("value", "")
     if check_type == "stdout_exact":
@@ -66,12 +121,13 @@ def _check(check: dict[str, Any], root: Path, stdout: str, exit_code: int) -> bo
     if check_type == "exit_code":
         return exit_code == int(value)
     if check_type == "file_exists":
-        exists = _safe_relative(root, str(check["path"])).exists()
+        path = _safe_relative(workspace, str(check["path"]))
+        exists = path.exists()
         return not exists if check.get("absent") else exists
     if check_type == "file_contains":
-        return value in _read_file(root, str(check["path"]))
+        return value in _read_file(workspace, str(check["path"]))
     if check_type == "file_empty":
-        return _read_file(root, str(check["path"])) == ""
+        return _read_file(workspace, str(check["path"])) == ""
     raise ValueError(f"unsupported check type: {check_type}")
 
 
@@ -151,21 +207,20 @@ def _verify_response(
     with tempfile.TemporaryDirectory(prefix="shell-verify-") as temporary:
         root = Path(temporary).resolve()
         try:
-            _write_setup(root, task)
-            candidate = root / "candidate.sh"
+            workspace, _verifier = _prepare_layout(root)
+            _write_setup(workspace, task)
+            candidate = workspace / "candidate.sh"
             candidate.write_text(script, encoding="utf-8")
             env = {
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
-                "HOME": str(root / "home"),
+                "HOME": str(workspace / "home"),
                 "LANG": "C",
                 "LC_ALL": "C",
-                "TEST_ROOT": str(root),
-                "TMPDIR": str(root / "tmp"),
+                "TEST_ROOT": str(workspace),
+                "TMPDIR": str(workspace / "tmp"),
                 **{str(k): str(v) for k, v in task.get("environment", {}).items()},
             }
-            (root / "home").mkdir()
-            (root / "tmp").mkdir()
-            syntax = subprocess.run(["bash", "-n", str(candidate)], cwd=root, env=env, capture_output=True, text=True, timeout=timeout_seconds)
+            syntax = subprocess.run(["bash", "-n", str(candidate)], cwd=workspace, env=env, capture_output=True, text=True, timeout=timeout_seconds)
             if syntax.returncode != 0:
                 base["execution"].update(syntax="failed", stderr=syntax.stderr)
                 base["failureLabels"] = ["syntax"]
@@ -174,7 +229,7 @@ def _verify_response(
             try:
                 execution = subprocess.run(
                     ["bash", str(candidate), *[str(arg) for arg in task.get("arguments", [])]],
-                    cwd=root,
+                    cwd=workspace,
                     env=env,
                     capture_output=True,
                     text=True,
@@ -187,7 +242,7 @@ def _verify_response(
             base["execution"].update(exitCode=execution.returncode, stdout=execution.stdout[:65536], stderr=execution.stderr[:65536])
             expected_exit = int(task.get("expectedExitCode", 0))
             checks = list(task.get("checks", []))
-            checks_ok = execution.returncode == expected_exit and all(_check(check, root, execution.stdout, execution.returncode) for check in checks)
+            checks_ok = execution.returncode == expected_exit and all(_check(check, workspace, execution.stdout, execution.returncode) for check in checks)
             base["verification"] = "passed" if checks_ok else "failed"
             base["execution"]["status"] = "passed" if checks_ok else "failed"
             if not checks_ok:

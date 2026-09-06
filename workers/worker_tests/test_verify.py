@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from workers.contracts import content_hash, compute_record_hash, validate_envelope
-from workers.verify import extract_bash_block, main, verify_response
+from workers.verify import _prepare_layout, extract_bash_block, main, verify_response
 
 
 class VerifyTests(unittest.TestCase):
@@ -138,6 +138,115 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual(emitted["provenance"]["session_id"], "sess-row")
         self.assertEqual(emitted["provenance"]["track"], "pi-tools")
         self.assertEqual(emitted["provenance"]["attempt"], 2)
+
+
+class IsolationLayoutTests(unittest.TestCase):
+    """T3.3: verifier/workspace separation mirroring the TS sandbox contract."""
+
+    def setUp(self):
+        self.task = {
+            "id": "iso-copy",
+            "prompt": "Copy the file named 'hello world.txt' to 'copied.txt' keeping its contents.",
+            "setupFiles": {"hello world.txt": "hello shell\n"},
+            "environment": {"INPUT_FILE": "hello world.txt"},
+            "checks": [{"type": "file_contains", "path": "copied.txt", "value": "hello shell"}],
+            "failureLabels": ["word-splitting"],
+        }
+
+    def test_layout_splits_workspace_and_verifier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            workspace, verifier = _prepare_layout(root)
+            self.assertEqual(workspace, root / "workspace")
+            self.assertEqual(verifier, root / "verifier")
+            self.assertTrue(workspace.is_dir())
+            self.assertTrue(verifier.is_dir())
+            # verifier tree lives outside the candidate-visible workspace
+            self.assertNotIn(str(verifier), str(workspace))
+            self.assertEqual(verifier.parent, root)
+            for child in ("home", "tmp"):
+                self.assertTrue((workspace / child).is_dir())
+
+    def test_candidate_universe_is_workspace_only(self):
+        # Asserted from inside the sandbox: TEST_ROOT is the workspace and the
+        # verifier directory exists one level above it, outside the universe.
+        task = {
+            "id": "iso-universe",
+            "prompt": "Report that the layout is intact.",
+            "checks": [{"type": "stdout_contains", "value": "universe-ok"}],
+            "failureLabels": ["functional"],
+        }
+        script = (
+            "```bash\n"
+            'case "$TEST_ROOT" in */workspace) ;; *) exit 4 ;; esac\n'
+            'test -d "$TEST_ROOT/../verifier" || exit 3\n'
+            '[ "$(basename "$PWD")" = "workspace" ] || exit 5\n'
+            'test -d "$TEST_ROOT/home" || exit 6\n'
+            'test -d "$TEST_ROOT/tmp" || exit 7\n'
+            'echo universe-ok\n'
+            "```"
+        )
+        result = verify_response(task, script)
+        self.assertEqual(result["verification"], "passed", result)
+        self.assertEqual(result["execution"]["status"], "passed")
+
+    def test_setup_and_candidate_live_inside_workspace(self):
+        # The candidate can see its own setup file via the workspace-relative
+        # TEST_ROOT, proving setup files are inside the candidate universe.
+        result = verify_response(self.task, '```bash\ncp "$INPUT_FILE" "$TEST_ROOT/copied.txt"\n```')
+        self.assertEqual(result["verification"], "passed", result)
+
+    def test_file_check_target_outside_workspace_rejected(self):
+        # A candidate writing files cannot forge a file_exists check that
+        # targets a path outside the workspace: the check itself is rejected
+        # as an evaluator-config error before its existence is evaluated.
+        task = {
+            "id": "iso-escape",
+            "prompt": "Escape the workspace.",
+            "setupFiles": {"seed.txt": "seed\n"},
+            "checks": [{"type": "file_exists", "path": "../escaped.txt"}],
+            "failureLabels": ["functional"],
+        }
+        script = "```bash\nmkdir -p \"$TEST_ROOT/..\" 2>/dev/null; echo pwned > \"$TEST_ROOT/../escaped.txt\"\n```"
+        result = verify_response(task, script)
+        self.assertEqual(result["verification"], "failed")
+        self.assertEqual(result["execution"]["status"], "failed")
+        self.assertEqual(result["failureLabels"], ["evaluator"])
+        self.assertIn("escapes", result["execution"]["error"])
+
+    def test_file_check_absolute_target_outside_workspace_rejected(self):
+        task = {
+            "id": "iso-escape-abs",
+            "prompt": "Escape the workspace with an absolute path.",
+            "checks": [{"type": "file_exists", "path": "/etc/passwd"}],
+            "failureLabels": ["functional"],
+        }
+        result = verify_response(task, "```bash\ncat /etc/passwd\n```")
+        self.assertEqual(result["verification"], "failed")
+        self.assertEqual(result["failureLabels"], ["evaluator"])
+        self.assertIn("escapes", result["execution"]["error"])
+
+    def test_file_check_absent_variant_rejected_outside_workspace(self):
+        # The absent=true flavor must not become an oracle for outside paths.
+        task = {
+            "id": "iso-escape-absent",
+            "prompt": "Prove absence outside the workspace.",
+            "checks": [{"type": "file_exists", "path": "../../outside.txt", "absent": True}],
+            "failureLabels": ["functional"],
+        }
+        result = verify_response(task, "```bash\ntrue\n```")
+        self.assertEqual(result["verification"], "failed")
+        self.assertEqual(result["failureLabels"], ["evaluator"])
+
+    def test_file_check_inside_workspace_still_works(self):
+        task = {
+            "id": "iso-inside",
+            "prompt": "Create a file inside the workspace.",
+            "checks": [{"type": "file_exists", "path": "made.txt", "absent": False}],
+            "failureLabels": ["functional"],
+        }
+        result = verify_response(task, "```bash\necho hi > \"$TEST_ROOT/made.txt\"\n```")
+        self.assertEqual(result["verification"], "passed", result)
 
 
 if __name__ == "__main__":
