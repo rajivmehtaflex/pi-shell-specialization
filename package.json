@@ -6,7 +6,10 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test \"src/**/*.test.ts\"",
+    "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "test:workers": "python3 -m unittest discover -s workers/worker_tests -t .",
+    "test:pi": "python3 -m unittest discover -s remote/pi_env/tests -t .",
+    "test:python": "npm run test:workers && npm run test:pi",
     "validate": "node dist/src/cli.js validate",
     "questions": "node dist/src/cli.js questions --public",
     "export-bundle": "node dist/src/cli.js export-bundle --out results/bundle"
