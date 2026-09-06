@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SshRemoteExecutor } from "./ssh-executor.ts";
+import { makeJobSpec } from "./modal-jobs.ts";
 import type { PhaseHandler } from "./orchestrator.ts";
+import { PHASE_DEFINITIONS } from "./phase-types.ts";
 import type { RemoteExecutor } from "./remote-executor.ts";
 
 export interface PhaseCommand {
@@ -12,6 +14,16 @@ export interface PhaseCommand {
   estimatedGpuSeconds?: number;
 }
 
+function requiredGpuCountFor(id: string): number | undefined {
+  return PHASE_DEFINITIONS.find((definition) => definition.id === id)?.requiredGpuCount;
+}
+
+/** Parses the leading GPU count from a spec string such as "2xL4" or "8xA100". */
+function declaredGpuCount(gpu: string): number | undefined {
+  const match = /^\s*(\d+)/.exec(gpu);
+  return match ? Number(match[1]) : undefined;
+}
+
 function validateCommand(id: string, value: unknown): PhaseCommand {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`invalid phase command: ${id}`);
   const item = value as Record<string, unknown>;
@@ -19,6 +31,16 @@ function validateCommand(id: string, value: unknown): PhaseCommand {
   if (typeof item.gpu !== "string" || !item.gpu.trim()) throw new Error(`phase command missing gpu: ${id}`);
   if (typeof item.timeoutSeconds !== "number" || item.timeoutSeconds < 1) throw new Error(`phase command invalid timeout: ${id}`);
   if (typeof item.estimatedCostUsd !== "number" || item.estimatedCostUsd < 0) throw new Error(`phase command invalid cost: ${id}`);
+  const requiredGpuCount = requiredGpuCountFor(id);
+  if (requiredGpuCount !== undefined && requiredGpuCount >= 1) {
+    const declared = declaredGpuCount(item.gpu);
+    if (declared === undefined) {
+      throw new Error(`phase ${id} requires ${requiredGpuCount} GPU(s) but command gpu "${item.gpu}" does not declare a GPU count (prefix it, e.g. "${requiredGpuCount}x<model>")`);
+    }
+    if (declared !== requiredGpuCount) {
+      throw new Error(`phase ${id} requires ${requiredGpuCount} GPU(s) but command gpu "${item.gpu}" declares ${declared}`);
+    }
+  }
   return {
     command: item.command,
     gpu: item.gpu,
@@ -42,9 +64,14 @@ export function createCommandHandlers(commands: Map<string, PhaseCommand>, execu
   const handlers = new Map<string, PhaseHandler>();
   for (const [id, command] of commands) {
     handlers.set(id, {
-      async run() {
-        const job = await executor.launch({ phase: id, ...command, simulation: false });
-        return { status: "working", job, nextAction: "poll SSH job" };
+      async run(context) {
+        const dryRun = context.mode === "dry-run";
+        if (dryRun && !executor.simulationSafe) {
+          throw new Error("dry-run mode cannot launch live jobs; configure a simulation-safe executor or run in live mode");
+        }
+        // Every launch (live or simulated) passes spec validation before any SSH call.
+        const job = await executor.launch(makeJobSpec({ phase: id, ...command, simulation: dryRun }));
+        return { status: "working", job, estimatedGpuSeconds: command.estimatedGpuSeconds, nextAction: "poll SSH job" };
       },
     });
   }

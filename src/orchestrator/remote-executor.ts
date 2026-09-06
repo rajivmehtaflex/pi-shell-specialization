@@ -31,6 +31,11 @@ export interface RemoteJob {
 }
 
 export interface RemoteExecutor {
+  /**
+   * True when this executor never touches real compute (fakes/simulations).
+   * Dry-run handlers refuse to launch through executors marked false.
+   */
+  simulationSafe: boolean;
   launch(spec: JobSpec): Promise<RemoteJob>;
   status(jobId: string): Promise<RemoteJob>;
   cancel(jobId: string): Promise<void>;
@@ -38,6 +43,7 @@ export interface RemoteExecutor {
 }
 
 export class InMemoryRemoteExecutor implements RemoteExecutor {
+  readonly simulationSafe = true;
   private readonly jobs = new Map<string, RemoteJob>();
   private sequence = 0;
 

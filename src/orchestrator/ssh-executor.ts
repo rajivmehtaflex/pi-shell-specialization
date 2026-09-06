@@ -129,6 +129,8 @@ export interface SshRemoteExecutorOptions {
 }
 
 export class SshRemoteExecutor implements RemoteExecutor {
+  /** Never simulation-safe: every launch is a real SSH call to a GPU host. */
+  readonly simulationSafe = false;
   private readonly host: string;
   private readonly user: string;
   private readonly port: number;

@@ -24,7 +24,8 @@ test("RemoteJob carries outcome metadata for reconciliation and runPhase guards"
 
 test("in-memory executor keeps its launch/status/cancel lifecycle with the extended status union", async () => {
   const executor = new InMemoryRemoteExecutor();
-  const live = await executor.launch({ phase: "P2.1", command: "real work", gpu: "L4", timeoutSeconds: 10, estimatedCostUsd: 2 });
+  assert.equal(executor.simulationSafe, true);
+  const live = await executor.launch({ phase: "P2.1", command: "real work", gpu: "1xL4", timeoutSeconds: 10, estimatedCostUsd: 2 });
   assert.equal(live.status, "queued");
   const simulated = await executor.launch({ phase: "P2.0", command: "dry", gpu: "none", timeoutSeconds: 1, estimatedCostUsd: 0, simulation: true });
   assert.equal((await executor.status(simulated.id)).status, "done");

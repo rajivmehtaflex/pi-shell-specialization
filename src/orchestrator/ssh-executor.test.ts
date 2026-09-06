@@ -123,11 +123,12 @@ test("SSH executor launches a durable background job via a base64-wrapped wrappe
     remoteRoot: "/workspace/pi-shell-specialization",
     runner,
   });
-  const job = await executor.launch({ phase: "P2.3", command: "python train.py", gpu: "L4", timeoutSeconds: 60, estimatedCostUsd: 1 });
+  const job = await executor.launch({ phase: "P2.3", command: "python train.py", gpu: "1xL4", timeoutSeconds: 60, estimatedCostUsd: 1 });
   assert.match(job.id, /^ssh-/);
   assert.equal(job.status, "running");
   assert.equal(job.exitCode, null);
   assert.equal(job.simulation, false);
+  assert.equal(executor.simulationSafe, false);
   assert.equal(calls[0].command, "ssh");
   assert.equal(calls.length, 1);
   // The joined `&;` sequence that made the remote `bash -lc` script unparseable must never appear.

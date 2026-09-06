@@ -38,6 +38,7 @@ export interface PhaseRecord {
   jobId?: string;
   remoteUrl?: string;
   gpuSeconds?: number;
+  estimatedGpuSeconds?: number;
   estimatedCostUsd?: number;
   actualCostUsd?: number;
   inputCursor?: number;

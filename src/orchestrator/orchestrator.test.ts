@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { createInitialLedger } from "./phase-ledger.ts";
 import { InMemoryRemoteExecutor, type RemoteExecutor, type RemoteJob } from "./remote-executor.ts";
 import { PhaseOrchestrator, type PhaseHandler } from "./orchestrator.ts";
+import { createCommandHandlers } from "./runtime-config.ts";
 import type { PhaseLedger } from "./phase-types.ts";
 
 const VALID_SHA = "a".repeat(64);
@@ -12,6 +13,7 @@ const VALID_SHA = "a".repeat(64);
 function staticRemote(status: RemoteJob["status"], extra: Partial<RemoteJob> = {}): RemoteExecutor & { polls: () => number } {
   let polls = 0;
   return {
+    simulationSafe: false,
     async launch() { throw new Error("not used"); },
     async status(jobId) {
       polls += 1;
@@ -36,6 +38,7 @@ function interruptedLedger(): PhaseLedger {
   phase.status = "interrupted";
   phase.jobId = "ssh-P0-abc123";
   phase.error = "previous orchestrator stopped; remote job requires status polling";
+  phase.estimatedGpuSeconds = 100;
   return ledger;
 }
 
@@ -81,6 +84,7 @@ test("orchestrator persists a remote job and leaves phase working", async () => 
 test("orchestrator resumes stale phases without rerunning completed phases", async () => {
   const root = await mkdtemp(join("/tmp", "shell-orchestrator-resume-"));
   const remote: RemoteExecutor = {
+    simulationSafe: false,
     async launch() { throw new Error("not used"); },
     async status(jobId) { return { id: jobId, phase: "P0", status: "running", estimatedCostUsd: 0, artifacts: [], simulation: false }; },
     async cancel() {},
@@ -311,4 +315,36 @@ test("resume() reconciles interrupted phases end-to-end through saved jobs", asy
   assert.deepEqual(phase.artifacts, ["artifacts/weakness_profile.json"]);
   assert.equal(remote.polls(), 1);
   await assert.rejects(() => orchestrator.reconcilePhase("P2.1"), /no registered remote job/);
+});
+
+test("reconciliation fails a phase whose GPU usage exceeds twice the estimate", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-budget-"));
+  const remote = staticRemote("done", { exitCode: 0, gpuSeconds: 300, actualCostUsd: 9 });
+  const orchestrator = new PhaseOrchestrator({ root, mode: "live", handlers: new Map(), remote, initialLedger: interruptedLedger(), checkpoint: async () => undefined });
+  const result = await orchestrator.reconcilePhase("P0");
+  assert.equal(result.kind, "failed");
+  assert.match(result.error ?? "", /GPU usage 300s exceeded 2x budget 200s/);
+  assert.equal(result.ledger.phases[0].status, "failed");
+  assert.notEqual(result.ledger.phases[0].status, "done");
+});
+
+test("dry-run orchestrator fails phases whose handlers target live executors", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-dryrun-live-"));
+  const liveExecutor = staticRemote("running");
+  let launches = 0;
+  const handlers = createCommandHandlers(new Map([["P0", { command: "bash workers/p0.sh", gpu: "1xL4", timeoutSeconds: 60, estimatedCostUsd: 0 }]]), {
+    simulationSafe: false,
+    async launch() {
+      launches += 1;
+      throw new Error("live executor must not be called");
+    },
+    async status() { throw new Error("not used"); },
+    async cancel() {},
+    async logs() { return ""; },
+  });
+  const orchestrator = new PhaseOrchestrator({ root, mode: "dry-run", handlers, remote: liveExecutor, checkpoint: async () => undefined });
+  const result = await orchestrator.runPhase("P0");
+  assert.equal(result.kind, "failed");
+  assert.match(result.error ?? "", /dry-run mode cannot launch live jobs/);
+  assert.equal(launches, 0);
 });

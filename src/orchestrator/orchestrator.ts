@@ -2,6 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInitialLedger, markPhaseDone, markPhaseWorking, parsePhaseResultManifest, phaseResultManifestPath, readLedger, recoverStaleWorking, resetFailedPhase, writeLedgerAtomic, type PhaseResultManifest } from "./phase-ledger.ts";
 import { PHASE_DEFINITIONS, type ExecutionMode, type PhaseLedger, type PhaseRecord } from "./phase-types.ts";
+import { enforceGpuBudget, enforceJobCost } from "./modal-jobs.ts";
 import type { RemoteExecutor, RemoteJob } from "./remote-executor.ts";
 
 export interface PhaseHandlerContext {
@@ -20,6 +21,7 @@ export interface PhaseHandlerResult {
   totalInputs?: number;
   lastCheckpoint?: string;
   gpuSeconds?: number;
+  estimatedGpuSeconds?: number;
   actualCostUsd?: number;
   nextAction?: string;
 }
@@ -156,6 +158,7 @@ export class PhaseOrchestrator {
         workingPhase.totalInputs = result.totalInputs;
         workingPhase.lastCheckpoint = result.lastCheckpoint;
         workingPhase.gpuSeconds = result.gpuSeconds ?? result.job?.gpuSeconds;
+        workingPhase.estimatedGpuSeconds = result.estimatedGpuSeconds ?? workingPhase.estimatedGpuSeconds;
         workingPhase.actualCostUsd = result.actualCostUsd ?? result.job?.actualCostUsd;
         workingPhase.nextAction = result.nextAction ?? "poll remote job";
         await writeLedgerAtomic(this.statePath, ledger);
@@ -178,6 +181,7 @@ export class PhaseOrchestrator {
       donePhase.totalInputs = result.totalInputs;
       donePhase.lastCheckpoint = result.lastCheckpoint;
       donePhase.gpuSeconds = result.gpuSeconds;
+      donePhase.estimatedGpuSeconds = result.estimatedGpuSeconds ?? donePhase.estimatedGpuSeconds;
       donePhase.actualCostUsd = result.actualCostUsd;
       await writeLedgerAtomic(this.statePath, ledger);
       const doneCommit = await this.checkpoint("complete", donePhase, ["state/phase-ledger.json", ...(result.artifacts ?? [])]);
@@ -196,6 +200,18 @@ export class PhaseOrchestrator {
     }
   }
 
+  /** Returns a violation message when a terminal job's GPU usage blew past 2x the estimate. */
+  private gpuBudgetViolation(phase: PhaseRecord, job: RemoteJob): string | undefined {
+    if (typeof phase.estimatedGpuSeconds !== "number" || typeof job.gpuSeconds !== "number") return undefined;
+    try {
+      enforceGpuBudget({ gpuSeconds: job.gpuSeconds, estimatedGpuSeconds: phase.estimatedGpuSeconds });
+      enforceJobCost(job, phase.estimatedGpuSeconds);
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
   /**
    * Polls the registered remote job for a phase and settles the ledger from its
    * outcome (T5.4). A finished job only completes the phase when a valid result
@@ -211,6 +227,16 @@ export class PhaseOrchestrator {
     if (!this.remote) throw new Error(`no remote executor configured; cannot reconcile phase ${id} (job ${phase.jobId})`);
     const job = await this.remote.status(phase.jobId);
 
+    if (job.status === "done" || job.status === "failed" || job.status === "cancelled") {
+      const violation = this.gpuBudgetViolation(phase, job);
+      if (violation) {
+        phase.status = "failed";
+        phase.error = violation;
+        phase.nextAction = `inspect remote GPU usage and call retryPhase("${id}")`;
+        await writeLedgerAtomic(this.statePath, ledger);
+        return { kind: "failed", error: violation, ledger };
+      }
+    }
     if (job.status === "queued" || job.status === "running") {
       phase.status = "working";
       phase.error = undefined;
