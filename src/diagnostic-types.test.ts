@@ -59,6 +59,56 @@ test("attempt validator rejects duplicate session-track-case-attempt keys", () =
   assert.throws(() => validateAttemptRecord(valid, new Set(["bash-001"]), seen), /duplicate/i);
 });
 
+test("attempt validator rejects execution records with contradictory stage results", () => {
+  assert.throws(
+    () => validateAttemptRecord({ ...valid, execution: { ...valid.execution, status: "passed", syntax: "failed" } }, new Set(["bash-001"])),
+    /inconsistent/i,
+  );
+  assert.throws(
+    () => validateAttemptRecord({ ...valid, execution: { ...valid.execution, status: "passed", verification: "not-run" } }, new Set(["bash-001"])),
+    /inconsistent/i,
+  );
+  assert.throws(
+    () => validateAttemptRecord({ ...valid, execution: { ...valid.execution, status: "blocked", syntax: "passed" } }, new Set(["bash-001"])),
+    /inconsistent/i,
+  );
+  assert.throws(
+    () => validateAttemptRecord({ ...valid, execution: { ...valid.execution, status: "sandbox-unavailable", verification: "passed" } }, new Set(["bash-001"])),
+    /inconsistent/i,
+  );
+});
+
+test("attempt validator accepts worker-shaped records for every stage outcome", () => {
+  // workers/verify.py blocked path: no syntax or verification stage ran
+  assert.doesNotThrow(() =>
+    validateAttemptRecord(
+      { ...valid, execution: { ...valid.execution, status: "blocked", syntax: "not-run", verification: "not-run", exitCode: null } },
+      new Set(["bash-001"]),
+    ),
+  );
+  // sandbox-unavailable: nothing ran
+  assert.doesNotThrow(() =>
+    validateAttemptRecord(
+      { ...valid, execution: { ...valid.execution, status: "sandbox-unavailable", syntax: "not-run", verification: "not-run", exitCode: null } },
+      new Set(["bash-001"]),
+    ),
+  );
+  // timed-out: syntax passed, verification never ran
+  assert.doesNotThrow(() =>
+    validateAttemptRecord(
+      { ...valid, execution: { ...valid.execution, status: "timed-out", verification: "not-run", exitCode: null } },
+      new Set(["bash-001"]),
+    ),
+  );
+  // failed after the syntax check: verification never reached
+  assert.doesNotThrow(() =>
+    validateAttemptRecord(
+      { ...valid, execution: { ...valid.execution, status: "failed", verification: "not-run", exitCode: 1 } },
+      new Set(["bash-001"]),
+    ),
+  );
+});
+
 const TEACHER_TASK_PROMPT = "List files in /tmp";
 const TEACHER_RESPONSE = "```bash\nls /tmp\n```\n";
 const PINNED_HASH = "948a41ef29de3b185c57990fdc6bf3588d2d1308b9aba94f8cdc4fe137b926d3";

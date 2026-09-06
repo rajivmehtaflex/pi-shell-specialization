@@ -60,6 +60,12 @@ function assertExecution(value: unknown): asserts value is ExecutionResult {
   if (!EXECUTION_STATUSES.has(value.status as ExecutionResult["status"])) throw new Error("invalid execution status");
   if (!SYNTAX_STATUSES.has(value.syntax as ExecutionResult["syntax"])) throw new Error("invalid syntax status");
   if (!VERIFICATION_STATUSES.has(value.verification as ExecutionResult["verification"])) throw new Error("invalid verification status");
+  if (value.status === "passed" && (value.syntax !== "passed" || value.verification !== "passed")) {
+    throw new Error("inconsistent execution record: status passed requires passed syntax and verification");
+  }
+  if ((value.status === "blocked" || value.status === "sandbox-unavailable") && (value.syntax === "passed" || value.verification === "passed")) {
+    throw new Error(`inconsistent execution record: ${value.status} status cannot report passed syntax or verification`);
+  }
   if (typeof value.stdout !== "string" || typeof value.stderr !== "string") throw new Error("execution output must be strings");
   if (typeof value.durationMs !== "number" || value.durationMs < 0) throw new Error("invalid execution duration");
   if (!Array.isArray(value.findings)) throw new Error("execution findings must be an array");
