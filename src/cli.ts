@@ -10,7 +10,7 @@ import { exportPublicQuestions, renderPublicQuestionsMarkdown } from "./question
 import { startSession } from "./session.ts";
 import { buildWeaknessProfile, compareProfiles, type ProfileComparison } from "./insights.ts";
 import { importExternalResults } from "./diagnostic-tools.ts";
-import { validateAttemptRecord, type ExternalAttemptRecord } from "./diagnostic-types.ts";
+import { attemptKey, validateAttemptRecord, type ExternalAttemptRecord } from "./diagnostic-types.ts";
 import type { ModelInvoker } from "./invoker.ts";
 import type { Track, TrackCaseScore } from "./types.ts";
 
@@ -38,7 +38,7 @@ async function loadImportedRecords(input: string): Promise<ExternalAttemptRecord
   for (const value of values) {
     validateAttemptRecord(value, knownCaseIds, seen);
     const record = value as ExternalAttemptRecord;
-    seen.add(`${record.session_id}\u001f${record.track}\u001f${record.case_id}\u001f${record.attempt}`);
+    seen.add(attemptKey(record));
     records.push(record);
   }
   return records;

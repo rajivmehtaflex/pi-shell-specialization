@@ -4,6 +4,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerDiagnosticTools } from "./diagnostic-tools.ts";
+import { registerShellSpecialization } from "./index.ts";
 
 function registry() {
   const tools = new Map<string, any>();
@@ -57,4 +58,35 @@ test("import tool validates JSONL and writes only accepted records", async () =>
   assert.equal(result.accepted, 1);
   assert.equal(result.rejected, 1);
   assert.equal((await readFile(output, "utf8")).trim().split("\n").length, 1);
+});
+
+test("legacy benchmark cases tool returns only sanitized public questions", async () => {
+  const tools = new Map<string, any>();
+  registerShellSpecialization({ registerTool: (tool) => tools.set(tool.name, tool) });
+  const tool = tools.get("shell_benchmark_cases");
+  assert.ok(tool, "shell_benchmark_cases must stay registered");
+  const result = payload(await tool.execute("1", {}));
+  assert.equal(result.valid, true);
+  assert.equal(result.questions.length, 60);
+  const keys = new Set<string>();
+  const collect = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const entry of value) collect(entry);
+      return;
+    }
+    if (typeof value === "object" && value !== null) {
+      for (const [key, entry] of Object.entries(value)) {
+        keys.add(key);
+        collect(entry);
+      }
+    }
+  };
+  collect(result);
+  for (const banned of ["testFixture", "verify", "expectedExitCode", "failureLabels", "setup"]) {
+    assert.equal(keys.has(banned), false, `payload must not expose key: ${banned}`);
+  }
+  assert.ok(keys.has("prompt") && keys.has("id") && keys.has("category"));
+  const filtered = payload(await tool.execute("2", { category: "Security and command-injection resistance" }));
+  assert.ok(filtered.questions.length > 0 && filtered.questions.length < 60);
+  assert.ok(filtered.questions.every((question: any) => question.category === "Security and command-injection resistance"));
 });

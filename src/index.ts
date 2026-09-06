@@ -1,5 +1,6 @@
 import { BENCHMARK_CASES, validateBenchmarkCases } from "./cases.ts";
 import { registerDiagnosticTools, type DiagnosticToolOptions } from "./diagnostic-tools.ts";
+import { exportPublicQuestions } from "./question-export.ts";
 import { registerOrchestrationTools } from "./orchestrator/orchestration-tools.ts";
 import { PhaseOrchestrator, type OrchestratorCheckpoint, type PhaseHandler } from "./orchestrator/orchestrator.ts";
 import type { ExecutionMode } from "./orchestrator/phase-types.ts";
@@ -49,7 +50,7 @@ export function registerShellSpecialization(pi: { registerTool(tool: any): void;
   pi.registerTool({
     name: "shell_benchmark_cases",
     label: "Shell Benchmark Cases",
-    description: "Inspect the 60-case Bash specialization diagnostic benchmark. This tool only returns prompts and metadata; execution requires the separate sandboxed runner.",
+    description: "List sanitized model-facing questions from the 60-case Bash specialization diagnostic benchmark. Returns prompts and metadata only; fixtures, verifiers, and expected exit codes are never exposed, and execution requires the separate sandboxed runner.",
     parameters: {
       type: "object",
       properties: {
@@ -57,10 +58,10 @@ export function registerShellSpecialization(pi: { registerTool(tool: any): void;
       },
     },
     async execute(_toolCallId: string, params: { category?: string }) {
-      const cases = params.category ? BENCHMARK_CASES.filter((item) => item.category === params.category) : BENCHMARK_CASES;
+      const questions = exportPublicQuestions().filter((question) => !params.category || question.category === params.category);
       return {
-        content: [{ type: "text", text: JSON.stringify({ valid: validateBenchmarkCases(BENCHMARK_CASES).length === 0, cases }, null, 2) }],
-        details: { count: cases.length },
+        content: [{ type: "text", text: JSON.stringify({ valid: validateBenchmarkCases(BENCHMARK_CASES).length === 0, questions }, null, 2) }],
+        details: { count: questions.length },
       };
     },
   });
