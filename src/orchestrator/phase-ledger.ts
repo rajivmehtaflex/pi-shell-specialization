@@ -92,6 +92,18 @@ export function recoverStaleWorking(ledger: PhaseLedger, now = new Date().toISOS
   return updated;
 }
 
+/** Re-enables an explicitly retried phase: failed -> pending with the stale job binding cleared. */
+export function resetFailedPhase(ledger: PhaseLedger, id: string, options: { now?: string } = {}): PhaseLedger {
+  const updated = cloneLedger(ledger, options.now);
+  const phase = phaseOrThrow(updated, id);
+  if (phase.status !== "failed") throw new Error(`phase is not failed: ${id} (${phase.status})`);
+  phase.status = "pending";
+  phase.jobId = undefined;
+  phase.error = undefined;
+  phase.nextAction = undefined;
+  return updated;
+}
+
 export async function writeLedgerAtomic(path: string, ledger: PhaseLedger): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.tmp-${process.pid}-${Date.now()}`;

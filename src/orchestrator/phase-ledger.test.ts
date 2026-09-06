@@ -9,6 +9,7 @@ import {
   markPhaseWorking,
   readLedger,
   recoverStaleWorking,
+  resetFailedPhase,
   writeLedgerAtomic,
 } from "./phase-ledger.ts";
 import { createArtifactManifest, recordArtifact } from "./artifact-manifest.ts";
@@ -58,6 +59,22 @@ test("atomic ledger write/read and stale working recovery", async () => {
   const recovered = recoverStaleWorking(loaded);
   assert.equal(recovered.phases.find((p) => p.id === "P2.1")?.status, "interrupted");
   assert.match(await readFile(path, "utf8"), /phase|schemaVersion/i);
+});
+
+test("resetFailedPhase re-enables only failed phases and clears the stale job", () => {
+  let ledger = markPhaseWorking(createInitialLedger({ mode: "live" }), "P2.1", { jobId: "job-1" });
+  const failedPhase = ledger.phases.find((p) => p.id === "P2.1")!;
+  failedPhase.status = "failed";
+  failedPhase.error = "remote job failed: job-1";
+  failedPhase.nextAction = "inspect remote logs and rerun explicitly";
+  ledger = resetFailedPhase(ledger, "P2.1", { now: "2026-08-19T00:03:00Z" });
+  const reset = ledger.phases.find((p) => p.id === "P2.1")!;
+  assert.equal(reset.status, "pending");
+  assert.equal(reset.jobId, undefined);
+  assert.equal(reset.error, undefined);
+  assert.equal(reset.nextAction, undefined);
+  assert.throws(() => resetFailedPhase(ledger, "P2.1"), /not failed/);
+  assert.throws(() => resetFailedPhase(createInitialLedger({ mode: "live" }), "P0"), /not failed/);
 });
 
 test("artifact manifest records bytes and SHA-256", async () => {

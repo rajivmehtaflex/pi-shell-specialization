@@ -1,6 +1,6 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
-import { createInitialLedger, markPhaseDone, markPhaseWorking, readLedger, recoverStaleWorking, writeLedgerAtomic } from "./phase-ledger.ts";
+import { createInitialLedger, markPhaseDone, markPhaseWorking, readLedger, recoverStaleWorking, resetFailedPhase, writeLedgerAtomic } from "./phase-ledger.ts";
 import { PHASE_DEFINITIONS, type ExecutionMode, type PhaseLedger, type PhaseRecord } from "./phase-types.ts";
 import type { RemoteExecutor, RemoteJob } from "./remote-executor.ts";
 
@@ -100,15 +100,31 @@ export class PhaseOrchestrator {
 
   async runNext(): Promise<OrchestratorResult> {
     const ledger = await this.initialize();
-    const next = ledger.phases.find((phase) => phase.status !== "done");
-    if (!next) return { kind: "done", ledger };
-    return this.runPhase(next.id);
+    for (const phase of ledger.phases) {
+      if (phase.status === "pending") return this.runPhase(phase.id);
+      if (phase.status === "interrupted" && !phase.jobId) return this.runPhase(phase.id);
+      // Interrupted phases with a registered remote job are reconciled, never relaunched.
+    }
+    const unfinished = ledger.phases.filter((phase) => phase.status !== "done");
+    if (!unfinished.length) return { kind: "done", ledger };
+    const summary = unfinished.map((phase) => `${phase.id}:${phase.status}`).join(", ");
+    return { kind: "blocked", reason: `no runnable phase (${summary})`, ledger };
   }
 
   async runPhase(id: string): Promise<OrchestratorResult> {
     let ledger = await this.initialize();
     const phase = this.phaseOrThrow(ledger, id);
     if (phase.status === "done") return { kind: "done", ledger };
+    if (phase.status === "working") {
+      throw new Error(`phase ${id} is already working${phase.jobId ? ` (job ${phase.jobId})` : ""}; resume or cancel before relaunching`);
+    }
+    if (phase.status === "failed") {
+      throw new Error(`phase ${id} failed and will not be relaunched implicitly${phase.error ? ` (${phase.error})` : ""}; call retryPhase("${id}") to relaunch`);
+    }
+    if (phase.status === "interrupted" && phase.jobId) {
+      throw new Error(`phase ${id} is interrupted with registered job ${phase.jobId}; resume to reconcile it before relaunching`);
+    }
+    if (phase.status === "blocked") throw new Error(`phase ${id} is blocked; resolve its blockers before running`);
     const dependencyReason = this.dependencyReason(ledger, id);
     if (dependencyReason) return { kind: "blocked", reason: dependencyReason, ledger };
     const handler = this.handlers.get(id);
@@ -172,6 +188,18 @@ export class PhaseOrchestrator {
       await writeLedgerAtomic(this.statePath, ledger);
       return { kind: "failed", error: failed.error, ledger };
     }
+  }
+
+  /** Explicitly re-enables a failed phase and immediately relaunches it. */
+  async retryPhase(id: string): Promise<OrchestratorResult> {
+    let ledger = await this.initialize();
+    const phase = this.phaseOrThrow(ledger, id);
+    if (phase.status !== "failed") {
+      throw new Error(`phase ${id} is not failed (status: ${phase.status}); retryPhase only re-enables failed phases`);
+    }
+    ledger = resetFailedPhase(ledger, id, { now: this.now() });
+    await writeLedgerAtomic(this.statePath, ledger);
+    return this.runPhase(id);
   }
 
   async resume(): Promise<PhaseLedger> {
