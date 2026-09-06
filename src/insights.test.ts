@@ -82,3 +82,28 @@ test("pass rate uses first attempts while pass@N recognizes a later success", ()
   assert.equal(profile.categories[0].passRate, 0.5);
   assert.equal(profile.categories[0].passAtN, 1);
 });
+
+test("mixed-model cohorts are rejected", () => {
+  const mixed = [record("bash-001", true), { ...record("bash-002", true), model: "other-model" }];
+  assert.throws(() => buildWeaknessProfile(mixed), /mixed cohort.*other-model/s);
+});
+
+test("mixed-track cohorts are rejected", () => {
+  const mixed = [record("bash-001", true), { ...record("bash-002", true), track: "pi-tools" as const }];
+  assert.throws(() => buildWeaknessProfile(mixed), /mixed cohort/);
+});
+
+test("mixed-provider cohorts are rejected", () => {
+  const mixed = [record("bash-001", true), { ...record("bash-002", true), provider: "other-provider" }];
+  assert.throws(() => buildWeaknessProfile(mixed), /mixed cohort/);
+});
+
+test("homogeneous cohorts pass with derived or explicit labels", () => {
+  const homogeneous = [record("bash-001", true), record("bash-002", true)];
+  const derived = buildWeaknessProfile(homogeneous);
+  assert.equal(derived.model, "qwen3.5:9b");
+  assert.equal(derived.track, "raw");
+  const explicit = buildWeaknessProfile(homogeneous, { model: "qwen3.5:9b", track: "raw" });
+  assert.equal(explicit.model, "qwen3.5:9b");
+  assert.equal(explicit.track, "raw");
+});

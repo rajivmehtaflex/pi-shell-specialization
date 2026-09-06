@@ -188,6 +188,10 @@ export function compareProfiles(student: WeaknessProfile, teacher: WeaknessProfi
 }
 
 export function buildWeaknessProfile(records: ExternalAttemptRecord[], options: ProfileOptions = {}): WeaknessProfile {
+  const cohorts = new Set(records.map((record) => `${record.model}/${record.provider}/${record.track}`));
+  if (cohorts.size > 1) {
+    throw new Error(`mixed cohort: records span ${[...cohorts].join(", ")}`);
+  }
   const evaluated = records.map((record) => {
     const item = CASES_BY_ID.get(record.case_id);
     if (!item) throw new Error(`unknown case id: ${record.case_id}`);
