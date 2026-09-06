@@ -1,4 +1,8 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from workers.contracts import compute_record_hash, validate_envelope
 from workers.teacher_audit import audit
@@ -95,18 +99,144 @@ class DataPhaseTests(unittest.TestCase):
         self.assertIs(accepted[0], envelope)
         self.assertEqual(report["rejected"], 0)
 
-    def test_split_is_deterministic_and_disjoint(self):
-        rows = [{"task_id": f"task-{i}"} for i in range(10)]
-        first = split_rows(rows, seed=42, holdout_count=2)
-        second = split_rows(rows, seed=42, holdout_count=2)
-        self.assertEqual(first, second)
-        ids = [row["task_id"] for part in first.values() for row in part]
-        self.assertEqual(len(ids), len(set(ids)))
-        self.assertEqual(len(first["holdout"]), 2)
+def split_input_rows(count, categories=("ops", "git", "text", "files", "search")):
+    """Build verified-envelope-shaped rows with distinct content and categories."""
+    rows = []
+    for index in range(count):
+        category = categories[index % len(categories)]
+        prompt = f"task {index}: run `echo {index}` and keep the output."
+        response = f"```bash\necho {index}\n```"
+        rows.append(
+            {
+                "task_id": f"task-{index:05d}",
+                "task": {"id": f"task-{index:05d}", "prompt": prompt, "category": category},
+                "response": response,
+                "verification": "passed",
+            }
+        )
+    return rows
 
-    def test_split_requires_extra_rows_for_holdout(self):
+
+class SplitQuotaTests(unittest.TestCase):
+    """T4.1: production quotas, dedup, balance, and determinism."""
+
+    def test_split_meets_production_quotas_with_balance(self):
+        result = split_rows(split_input_rows(2300))
+        self.assertEqual(len(result["train"]), 1800)
+        self.assertEqual(len(result["eval"]), 250)
+        self.assertEqual(len(result["holdout"]), 250)
+        self.assertIsInstance(result["balanceDelta"], float)
+        self.assertGreaterEqual(result["balanceDelta"], 0.0)
+        self.assertLessEqual(result["balanceDelta"], 0.1)
+
+    def test_split_rejects_below_minimum_before_writing(self):
+        rows = split_input_rows(2299)
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.jsonl"
+            input_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            train_path = Path(tmp) / "train.jsonl"
+            eval_path = Path(tmp) / "eval.jsonl"
+            holdout_path = Path(tmp) / "holdout.jsonl"
+            argv = [
+                "split.py",
+                "--in", str(input_path),
+                "--train", str(train_path),
+                "--eval", str(eval_path),
+                "--holdout", str(holdout_path),
+            ]
+            from workers.split import main
+
+            with mock.patch("sys.argv", argv):
+                with self.assertRaises(ValueError) as ctx:
+                    main()
+            self.assertIn("input must contain at least 2300 accepted rows", str(ctx.exception))
+            for path in (train_path, eval_path, holdout_path):
+                self.assertFalse(path.exists(), f"{path.name} must not be written on rejection")
+
+    def test_split_dedups_identical_content_across_task_ids(self):
+        rows = split_input_rows(2301)
+        rows[1]["task"]["prompt"] = rows[0]["task"]["prompt"]
+        rows[1]["response"] = rows[0]["response"]
+        self.assertEqual(compute_record_hash(rows[0]), compute_record_hash(rows[1]))
+        result = split_rows(rows)
+        self.assertEqual((len(result["train"]), len(result["eval"]), len(result["holdout"])), (1800, 250, 250))
+        all_ids = [row["task_id"] for part in ("train", "eval", "holdout") for row in result[part]]
+        self.assertEqual(len(all_ids), 2300)
+        self.assertNotIn("task-00001", all_ids)  # duplicate content dropped, first kept
+
+    def test_split_counts_minimum_after_dedup(self):
+        rows = split_input_rows(2300)
+        rows[1]["task"]["prompt"] = rows[0]["task"]["prompt"]
+        rows[1]["response"] = rows[0]["response"]
         with self.assertRaises(ValueError):
+            split_rows(rows)
+
+    def test_split_is_deterministic_byte_for_byte(self):
+        rows = split_input_rows(2300)
+        first = json.dumps(split_rows(rows), sort_keys=True)
+        second = json.dumps(split_rows(rows), sort_keys=True)
+        self.assertEqual(first, second)
+
+    def test_split_parts_are_disjoint_by_id_and_content(self):
+        rows = split_input_rows(2300)
+        result = split_rows(rows)
+        parts = ("train", "eval", "holdout")
+        all_ids = [row["task_id"] for part in parts for row in result[part]]
+        all_hashes = [compute_record_hash(row) for part in parts for row in result[part]]
+        self.assertEqual(len(all_ids), len(set(all_ids)))
+        self.assertEqual(len(all_hashes), len(set(all_hashes)))
+        self.assertEqual(len(all_ids), 2300)
+
+    def test_split_allocates_categories_proportionally(self):
+        # Sizes chosen so no quota is exactly divisible: 461/688/459/461/231 of 2300.
+        sizes = {"alpha": 461, "beta": 688, "gamma": 459, "delta": 461, "echo": 231}
+        rows = []
+        index = 0
+        for category, size in sizes.items():
+            for _ in range(size):
+                rows.append(
+                    {
+                        "task_id": f"task-{index:05d}",
+                        "task": {"id": f"task-{index:05d}", "prompt": f"prompt {index}", "category": category},
+                        "response": f"```bash\necho {index}\n```",
+                        "verification": "passed",
+                    }
+                )
+                index += 1
+        result = split_rows(rows)
+        total = len(rows)
+        worst = 0.0
+        for part in ("eval", "holdout"):
+            split_total = len(result[part])
+            for category, size in sizes.items():
+                observed = sum(1 for row in result[part] if row["task"]["category"] == category) / split_total
+                worst = max(worst, abs(observed - size / total))
+        self.assertLessEqual(worst, 0.01)
+        self.assertAlmostEqual(result["balanceDelta"], worst, delta=1e-6)
+
+    def test_split_category_falls_back_to_row_level_then_unknown(self):
+        rows = split_input_rows(2300)
+        for row in rows[:2300]:
+            row["task"].pop("category", None)
+            row["category"] = "flat"
+        result = split_rows(rows)
+        self.assertLessEqual(result["balanceDelta"], 0.1)
+        rows = split_input_rows(2300)
+        for row in rows:
+            row["task"].pop("category", None)
+        result = split_rows(rows)
+        self.assertLessEqual(result["balanceDelta"], 0.1)  # all "unknown", perfectly balanced
+
+    def test_split_rejects_tiny_input(self):
+        with self.assertRaises(ValueError) as ctx:
             split_rows([{"task_id": "only"}], holdout_count=1)
+        self.assertIn("accepted rows", str(ctx.exception))
+
+    def test_split_rejects_unidentifiable_row(self):
+        rows = split_input_rows(2300)
+        rows.append({"task": {"prompt": ""}, "response": "   "})
+        with self.assertRaises(ValueError):
+            split_rows(rows)
 
 
 if __name__ == "__main__":
