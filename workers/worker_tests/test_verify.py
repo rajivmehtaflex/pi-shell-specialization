@@ -249,5 +249,106 @@ class IsolationLayoutTests(unittest.TestCase):
         self.assertEqual(result["verification"], "passed", result)
 
 
+class TaskValidationTests(unittest.TestCase):
+    """T4.2: pre-execution evaluator-config validation (substantive checks + single exit-code spec)."""
+
+    def setUp(self):
+        self.task = {
+            "id": "val-copy",
+            "prompt": "Copy the file named 'hello world.txt' to 'copied.txt' keeping its contents.",
+            "setupFiles": {"hello world.txt": "hello shell\n"},
+            "environment": {"INPUT_FILE": "hello world.txt"},
+            "checks": [{"type": "file_contains", "path": "copied.txt", "value": "hello shell"}],
+            "failureLabels": ["word-splitting"],
+        }
+        self.good_response = '```bash\ncp "$INPUT_FILE" "$TEST_ROOT/copied.txt"\n```'
+
+    def _verify_without_execution(self, task):
+        with mock.patch("workers.verify.subprocess.run") as run_mock:
+            result = verify_response(task, self.good_response)
+        self.assertFalse(run_mock.called, "no process may be launched for an invalid task")
+        return result
+
+    def test_missing_checks_rejected_pre_execution(self):
+        task = dict(self.task)
+        del task["checks"]
+        result = self._verify_without_execution(task)
+        self.assertEqual(result["verification"], "failed")
+        self.assertEqual(result["execution"]["status"], "failed")
+        self.assertEqual(result["failureLabels"], ["evaluator"])
+        self.assertEqual(result["execution"]["error"], "task has no substantive checks")
+        self.assertEqual(result["execution"]["syntax"], "not-run")
+
+    def test_empty_checks_rejected_pre_execution_without_side_effects(self):
+        # The setup files would create a marker if setup ran; assert nothing ran.
+        task = {
+            "id": "val-empty",
+            "prompt": "Create marker.txt.",
+            "setupFiles": {"marker.txt": "side effect\n"},
+            "checks": [],
+        }
+        result = self._verify_without_execution(task)
+        self.assertEqual(result["failureLabels"], ["evaluator"])
+        self.assertEqual(result["execution"]["error"], "task has no substantive checks")
+
+    def test_non_list_checks_rejected_pre_execution(self):
+        result = self._verify_without_execution({**self.task, "checks": "file_contains"})
+        self.assertEqual(result["failureLabels"], ["evaluator"])
+        self.assertEqual(result["execution"]["error"], "task checks must be a list")
+
+    def test_exit_code_only_checks_rejected_pre_execution(self):
+        task = {
+            "id": "val-exit-only",
+            "prompt": "Exit cleanly.",
+            "checks": [{"type": "exit_code", "value": 0}],
+        }
+        result = self._verify_without_execution(task)
+        self.assertEqual(result["failureLabels"], ["evaluator"])
+        self.assertEqual(result["execution"]["error"], "task has no substantive checks")
+
+    def test_unsupported_check_type_named_in_rejection(self):
+        task = {
+            "id": "val-unsupported",
+            "prompt": "Prove a file is absent.",
+            "checks": [{"type": "file_absent", "path": "ghost.txt"}],
+        }
+        result = self._verify_without_execution(task)
+        self.assertEqual(result["failureLabels"], ["evaluator"])
+        self.assertEqual(result["execution"]["error"], "unsupported check type: file_absent")
+
+    def test_redundant_exit_code_check_is_deduped(self):
+        from workers.verify import _validate_task
+
+        checks = [{"type": "exit_code", "value": 0}, {"type": "file_contains", "path": "copied.txt", "value": "hello shell"}]
+        effective, error = _validate_task({**self.task, "expectedExitCode": 0, "checks": checks})
+        self.assertIsNone(error)
+        self.assertEqual(effective, [{"type": "file_contains", "path": "copied.txt", "value": "hello shell"}])
+        # End to end: the task still passes with the single canonical gate.
+        result = verify_response({**self.task, "expectedExitCode": 0, "checks": checks}, self.good_response)
+        self.assertEqual(result["verification"], "passed", result)
+        self.assertEqual(result["execution"]["exitCode"], 0)
+
+    def test_conflicting_exit_code_rejected_pre_execution(self):
+        task = {
+            "id": "val-conflict",
+            "prompt": "Copy a file.",
+            "expectedExitCode": 0,
+            "checks": [
+                {"type": "exit_code", "value": 1},
+                {"type": "file_contains", "path": "copied.txt", "value": "hello shell"},
+            ],
+        }
+        result = self._verify_without_execution(task)
+        self.assertEqual(result["failureLabels"], ["evaluator"])
+        self.assertEqual(result["execution"]["error"], "conflicting exit code: expectedExitCode=0 vs exit_code check=1")
+
+    def test_validate_task_rejects_non_dict_check(self):
+        from workers.verify import _validate_task
+
+        effective, error = _validate_task({**self.task, "checks": ["file_contains"]})
+        self.assertEqual(error, "each check must be an object")
+        self.assertEqual(effective, [])
+
+
 if __name__ == "__main__":
     unittest.main()

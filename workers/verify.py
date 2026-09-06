@@ -131,6 +131,65 @@ def _check(check: dict[str, Any], workspace: Path, stdout: str, exit_code: int) 
     raise ValueError(f"unsupported check type: {check_type}")
 
 
+SUPPORTED_CHECK_TYPES = frozenset({"stdout_exact", "stdout_contains", "exit_code", "file_exists", "file_contains", "file_empty"})
+
+
+def _validate_task(task: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
+    """Pre-execution evaluator-config validation.
+
+    Returns ``(effective_checks, error)``. A non-None ``error`` is an
+    evaluator-config rejection: verification fails with ``failureLabels:
+    ["evaluator"]`` and ``execution.error`` explaining the problem, before
+    anything is executed.
+
+    Rules:
+      * ``checks`` must exist and be a list of check objects;
+      * every check type must be supported (rejected up front, naming the
+        bad type, instead of surfacing mid-run);
+      * the task-level ``expectedExitCode`` is the single canonical exit
+        gate: an ``exit_code`` check with the same value is dropped as
+        redundant, one with a different value is a conflicting exit-code
+        rejection;
+      * at least one substantive check (any type other than ``exit_code``)
+        must remain after dedup.
+    """
+    checks = task.get("checks")
+    if checks is None:
+        return [], "task has no substantive checks"
+    if not isinstance(checks, list):
+        return [], "task checks must be a list"
+
+    try:
+        expected_exit = int(task.get("expectedExitCode", 0))
+    except (TypeError, ValueError):
+        return [], f"invalid expectedExitCode: {task.get('expectedExitCode')!r}"
+
+    typed: list[tuple[str, dict[str, Any]]] = []
+    for check in checks:
+        if not isinstance(check, dict):
+            return [], "each check must be an object"
+        check_type = check.get("type")
+        if check_type not in SUPPORTED_CHECK_TYPES:
+            return [], f"unsupported check type: {check_type}"
+        typed.append((str(check_type), check))
+
+    effective: list[dict[str, Any]] = []
+    for check_type, check in typed:
+        if check_type != "exit_code":
+            effective.append(check)
+            continue
+        try:
+            check_exit = int(check.get("value", 0))
+        except (TypeError, ValueError):
+            return [], f"invalid exit_code check value: {check.get('value')!r}"
+        if check_exit != expected_exit:
+            return [], f"conflicting exit code: expectedExitCode={expected_exit} vs exit_code check={check_exit}"
+
+    if not effective:
+        return [], "task has no substantive checks"
+    return effective, None
+
+
 def _provenance(task_id: str, provided: dict[str, Any] | None) -> dict[str, Any]:
     """Merge row-level provenance keys over the canonical verifier defaults."""
     provided = provided or {}
@@ -188,6 +247,12 @@ def _verify_response(
         "failureLabels": [],
         "provenance": _provenance(task_id, provenance),
     }
+    checks, config_error = _validate_task(task)
+    if config_error is not None:
+        base["execution"]["error"] = config_error
+        base["failureLabels"] = ["evaluator"]
+        base["execution"]["durationMs"] = round((time.monotonic() - started) * 1000)
+        return base
     try:
         script = extract_bash_block(response)
     except ValueError as error:
@@ -241,7 +306,6 @@ def _verify_response(
                 return base
             base["execution"].update(exitCode=execution.returncode, stdout=execution.stdout[:65536], stderr=execution.stderr[:65536])
             expected_exit = int(task.get("expectedExitCode", 0))
-            checks = list(task.get("checks", []))
             checks_ok = execution.returncode == expected_exit and all(_check(check, workspace, execution.stdout, execution.returncode) for check in checks)
             base["verification"] = "passed" if checks_ok else "failed"
             base["execution"]["status"] = "passed" if checks_ok else "failed"
