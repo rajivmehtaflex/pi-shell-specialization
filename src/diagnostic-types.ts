@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DiagnosticCase, ExecutionResult, Track } from "./types.ts";
 
 export interface PublicQuestion {
@@ -85,4 +86,82 @@ export function validateAttemptRecord(
   }
   const key = attemptKey(record as ExternalAttemptRecord);
   if (seenKeys?.has(key)) throw new Error(`duplicate attempt: ${key}`);
+}
+
+export type TeacherVerification = "passed" | "failed";
+
+export interface TeacherRecord {
+  task_id: string;
+  task: { prompt: string } & Record<string, unknown>;
+  response: string;
+  verification: TeacherVerification;
+  execution: Record<string, unknown>;
+  failureLabels: string[];
+  provenance: {
+    session_id: string;
+    model: string;
+    provider: string;
+    track: Track;
+    attempt: number;
+  };
+  content_hash: string;
+}
+
+const CONTENT_HASH_PATTERN = /^[0-9a-f]{64}$/;
+
+export function normalizeTeacherText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+export function teacherContentHash(taskText: string, response: string): string {
+  const task = normalizeTeacherText(taskText);
+  const answer = normalizeTeacherText(response);
+  const payload = `{"response": ${JSON.stringify(answer)}, "task": ${JSON.stringify(task)}}`;
+  return createHash("sha256").update(payload, "utf8").digest("hex");
+}
+
+export function validateTeacherRecord(value: unknown): string[] {
+  const problems: string[] = [];
+  if (!isRecord(value)) return ["teacher record must be an object"];
+  const record = value as Partial<TeacherRecord>;
+
+  if (typeof record.task_id !== "string" || record.task_id.length === 0) problems.push("task_id must be a non-empty string");
+
+  const task = record.task;
+  let taskPrompt: string | undefined;
+  if (!isRecord(task)) {
+    problems.push("task must be an object");
+  } else if (typeof task.prompt !== "string" || task.prompt.length === 0) {
+    problems.push("task.prompt must be a non-empty string");
+  } else {
+    taskPrompt = task.prompt;
+  }
+
+  if (typeof record.response !== "string" || record.response.trim().length === 0) problems.push("response must be a non-empty string");
+  if (record.verification !== "passed" && record.verification !== "failed") problems.push('verification must be "passed" or "failed"');
+  if (!isRecord(record.execution)) problems.push("execution must be an object");
+  if (!Array.isArray(record.failureLabels) || !record.failureLabels.every((label) => typeof label === "string")) {
+    problems.push("failureLabels must be an array of strings");
+  }
+
+  const provenance = record.provenance;
+  if (!isRecord(provenance)) {
+    problems.push("provenance must be an object");
+  } else {
+    const p = provenance as Partial<TeacherRecord["provenance"]>;
+    if (typeof p.session_id !== "string" || p.session_id.length === 0) problems.push("provenance.session_id must be a non-empty string");
+    if (typeof p.model !== "string" || p.model.length === 0) problems.push("provenance.model must be a non-empty string");
+    if (typeof p.provider !== "string" || p.provider.length === 0) problems.push("provenance.provider must be a non-empty string");
+    if (p.track !== "raw" && p.track !== "pi-tools") problems.push('provenance.track must be "raw" or "pi-tools"');
+    if (!Number.isInteger(p.attempt) || (p.attempt as number) < 1) problems.push("provenance.attempt must be an integer >= 1");
+  }
+
+  if (typeof record.content_hash !== "string" || !CONTENT_HASH_PATTERN.test(record.content_hash)) {
+    problems.push("content_hash must be 64 lowercase hex characters");
+  } else if (taskPrompt !== undefined && typeof record.response === "string") {
+    const expected = teacherContentHash(taskPrompt, record.response);
+    if (record.content_hash !== expected) problems.push(`content_hash mismatch: expected ${expected}`);
+  }
+
+  return problems;
 }
