@@ -608,19 +608,21 @@ When Pi controls the SSH machine from another host, the extension reads non-secr
 state/phase-commands.json
 ```
 
+Override the path with the `PI_PHASE_COMMANDS_FILE` environment variable when the file lives elsewhere.
+
 Example shape:
 
 ```json
 {
   "P0": {
     "command": "bash scripts/phases/p0-baseline.sh",
-    "gpu": "L4",
+    "gpu": "1xL4",
     "timeoutSeconds": 3600,
     "estimatedCostUsd": 1
   },
   "P2.6": {
     "command": "bash scripts/phases/p2-6-async-grpo.sh",
-    "gpu": "L4:2",
+    "gpu": "2xL4",
     "timeoutSeconds": 28800,
     "estimatedCostUsd": 8,
     "estimatedGpuSeconds": 28800
@@ -628,7 +630,7 @@ Example shape:
 }
 ```
 
-The package launches only commands present in this allowlisted file. Missing phase commands are reported as `blocked`; they are never guessed or generated from model output. P2.6 must declare the two-GPU topology explicitly.
+GPU strings must declare an explicit count prefix (`1xL4`, `2xA100`). A bare `L4` is rejected, and the declared count is cross-checked against the phase's `requiredGpuCount` from `src/orchestrator/phase-types.ts` (P2.6 requires exactly `2`). The package launches only commands present in this allowlisted file. Missing phase commands are reported as `blocked`; they are never guessed or generated from model output. Every script under `scripts/phases/` emits a result manifest at `state/runs/<phaseId>/result.json` that reconciliation validates.
 
 ---
 
@@ -688,20 +690,56 @@ Do not claim the article's two-GPU AsyncGRPO path is operational on a one-GPU ma
 
 ## 11. Phase and persistence blockers
 
-Environment installation does not complete these package tasks:
+Most integration blockers from earlier waves are now implemented. The remaining blockers are external prerequisites: hardware, credentials, and network resources the package correctly refuses to fake.
+
+### Resolved (implemented and locally verified)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Central orchestrator | Done | Ledger + adapters + deterministic workers + gates + checkpoints pass the dry-run; live mode refuses a missing checkpoint |
+| Canonical result manifests | Done | Every `scripts/phases/*.sh` emits `state/runs/<phaseId>/result.json`; reconciliation validates shape, phase id, and real sha256 digests |
+| Pi/OpenEnv harness | Done | `remote/pi_env/runtime.py` `run_rollout` + `RolloutHarness` produce canonical envelopes with trace/aux artifacts |
+| Phase tools and dashboard | Done | `shell_specialization_*` tools registered in `src/index.ts`; TUI dashboard renders the ledger |
+| Resume bootstrap | Done | `shell_specialization_resume` recovers stale phases, reconciles saved SSH jobs, hash-verifies all artifacts |
+| HF checkpoint sync | Done | Git-backed checkpoint on the allowlisted roots (`state/`, `data/`, `artifacts/`, `runs/`); dry-run never pushes |
+| Data workers | Done | `workers/verify.py` (substantive-check requirement), `teacher_audit.py`, `synth_gen.py`, `split.py` (2300-row minimum, eval=250, holdout=250, `balanceDelta <= 0.1`) |
+| Phase scripts | Done | `scripts/phases/` — one script per phase id, contract-tested by `scripts/phases.test.ts` (manifest emission, real hashes, prerequisite fail-fast, hard P2.6 two-GPU gate) |
+| Honest dry-run | Done | Local phases run with real gates; remote phases simulated; no network, no GPU jobs, no pushes |
+
+### Still external (prerequisites the scripts fail fast on)
 
 | Blocker | Required work | Gate |
 |---|---|---|
-| Central orchestrator | Connect ledger, adapters, deterministic workers, gates, and checkpoints | Full dry-run completes |
-| Pi/OpenEnv harness | Replace OpenCode-specific session factory with Pi adapter | One Pi rollout trace/verifier pass |
-| Phase tools | Register `shell_specialization_*` tools in `src/index.ts` | Pi discovers status/start/resume tools |
-| Dashboard | Render status/cursor/job/cost/commit/artifact table | Live Pi TUI displays ledger |
-| Resume bootstrap | Pull repos, verify hashes, recover stale phases, poll jobs | New SSH machine resumes correctly |
-| HF checkpoint sync | Push before launch, after job registration, after batches, after completion | Durable commit exists each time |
-| Training workers | Add SFT, merge, eval, AsyncGRPO, and serving entry points | Remote job specs execute |
-| First external smoke | One Linux/Pi rollout with hidden verification | Artifact and state checkpoint pushed |
+| Linux + bubblewrap evaluator | Provide the disposable Linux sandbox for verifier isolation | macOS fails closed; `workers/verify.py` smoke passes on Linux |
+| SSH GPU host | Configure `PI_SSH_HOST`/`PI_SSH_USER`/`PI_SSH_REMOTE_ROOT` | `createConfiguredSshExecutor()` returns an executor and live mode starts |
+| GPUs | 1 GPU for teacher/SFT/eval/serve; 2 GPUs for P2.6 | `GRPO_GPUS` lists two distinct ids; single-GPU P2.6 is refused by design |
+| Pi CLI + model endpoint | Install Pi and an OpenAI-compatible endpoint; set the `PI_*` environment | `remote/pi_env.config.load_config()` passes; one rollout smoke |
+| llama.cpp teacher endpoint | Serve the offline teacher; run P2.1 through the configured phase command | `TEACHER_ROWS` / `state/teacher_raw.jsonl` produced |
+| HF remote | Authenticate and create `rajivmehtapy/pi-shell-specialization` | Checkpoint commits push; P2.4/P2.6b uploads pin revisions |
+| Actual SFT/GRPO training | `TRAIN_SFT_COMMAND`, `GRPO_COMMAND`, `SERVE_COMMAND` on the GPU host | P2.3–P2.7 manifests report success |
 
-The package foundation already includes the benchmark, weakness analysis, ledger foundation, question generator, teacher client, verifier, data audit, and fake remote jobs. The items above are the remaining integration and remote-execution work.
+### Running the phases
+
+Each phase script follows the manifest contract (strict mode, real sha256 artifacts under the committable roots, fail-fast prerequisite errors) and is documented in the README "Phase scripts" section. Invocation is either direct for the local-verifiable phases:
+
+```text
+bash scripts/phases/p0-baseline.sh
+bash scripts/phases/p2-0-data-foundation.sh
+bash scripts/phases/p2-2-audit-split.sh     # needs teacher rows (P2.1 output)
+bash scripts/phases/p2-8-export.sh
+```
+
+or through the SSH machine via `state/phase-commands.json` for the GPU phases (see the phase-command contract in section 9). The acceptance sequence for every change:
+
+```text
+npm test
+npm run build
+npm run validate
+npm run test:python
+one-prompt dry run (WORKFLOW_MODE unset)
+```
+
+Switch to `WORKFLOW_MODE=live` only after the dry run passes; live requires the SSH env vars and a configured HF checkpoint, and it runs the configured phase commands on the SSH host.
 
 ---
 
@@ -747,15 +785,17 @@ one remote checkpoint push
 Only after the first live data phase passes:
 
 ```text
-P0 baseline
-P2.0 question generation
-P2.1 teacher data
-P2.2 audit/split
-P2.3 SFT
-P2.5 base/student evaluation
-P2.6 optional loop-owning AsyncGRPO
-P2.7 serving
-P2.8 Pi provider/final export
+P0    baseline weakness profile
+P2.0  shell data foundation
+P2.1  teacher inference
+P2.2  dataset audit and split
+P2.3  QLoRA/SFT
+P2.4  merge and upload v0.1
+P2.5  base/student evaluation
+P2.6  optional loop-owning AsyncGRPO (two GPUs)
+P2.6b merge and upload v0.2
+P2.7  serving at 64K
+P2.8  Pi provider and final export
 ```
 
 ---
@@ -810,8 +850,7 @@ PHASE 1 RESULT
 - Package dry-run: <checkpoint>                  [PASS/FAIL]
 - Pi one-rollout smoke: <checkpoint>             [PASS/FAIL]
 
-Next: finish the Pi/OpenEnv harness adapter, central orchestrator,
-phase tools, dashboard, resume bootstrap, and first live shell rollout.
+Next: provision the external prerequisites (Linux/bubblewrap evaluator, SSH GPU host, GPUs, Pi CLI + model endpoint, teacher endpoint, HF remote), then run the first live shell rollout through scripts/phases/ in live mode.
 ```
 
 ---
