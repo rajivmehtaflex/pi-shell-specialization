@@ -7,6 +7,8 @@ import {
   createInitialLedger,
   markPhaseDone,
   markPhaseWorking,
+  parsePhaseResultManifest,
+  phaseResultManifestPath,
   readLedger,
   recoverStaleWorking,
   resetFailedPhase,
@@ -75,6 +77,32 @@ test("resetFailedPhase re-enables only failed phases and clears the stale job", 
   assert.equal(reset.nextAction, undefined);
   assert.throws(() => resetFailedPhase(ledger, "P2.1"), /not failed/);
   assert.throws(() => resetFailedPhase(createInitialLedger({ mode: "live" }), "P0"), /not failed/);
+});
+
+test("phase result manifest contract validates shape, phase, and artifact hashes", () => {
+  assert.equal(phaseResultManifestPath("/proj", "P2.6"), join("/proj", "state", "runs", "P2.6", "result.json"));
+  const valid = {
+    phase: "P0",
+    status: "success",
+    artifacts: [{ path: "artifacts/weakness_profile.json", sha256: "a".repeat(64) }],
+    completedAt: "2026-09-06T09:30:00Z",
+  };
+  const parsed = parsePhaseResultManifest(JSON.stringify(valid), "P0");
+  assert.equal(parsed.phase, "P0");
+  assert.equal(parsed.status, "success");
+  assert.deepEqual(parsed.artifacts, [{ path: "artifacts/weakness_profile.json", sha256: "a".repeat(64) }]);
+  assert.throws(() => parsePhaseResultManifest(JSON.stringify(valid), "P2.6"), /phase mismatch/);
+  assert.throws(() => parsePhaseResultManifest(JSON.stringify({ ...valid, status: "ok" }), "P0"), /status/);
+  assert.throws(() => parsePhaseResultManifest(JSON.stringify({ ...valid, artifacts: [] }), "P0"), /artifacts/);
+  const failedManifest = parsePhaseResultManifest(JSON.stringify({ ...valid, status: "failed", artifacts: [], error: "boom" }), "P0");
+  assert.equal(failedManifest.status, "failed");
+  assert.deepEqual(failedManifest.artifacts, []);
+  assert.equal(failedManifest.error, "boom");
+  assert.throws(() => parsePhaseResultManifest(JSON.stringify({ ...valid, artifacts: [{ path: "", sha256: "a".repeat(64) }] }), "P0"), /path/);
+  assert.throws(() => parsePhaseResultManifest(JSON.stringify({ ...valid, artifacts: [{ path: "x.json", sha256: "nothex" }] }), "P0"), /sha256/);
+  assert.throws(() => parsePhaseResultManifest(JSON.stringify({ ...valid, completedAt: "" }), "P0"), /completedAt/);
+  assert.throws(() => parsePhaseResultManifest("{not-json", "P0"), /JSON/);
+  assert.throws(() => parsePhaseResultManifest(JSON.stringify(["array"]), "P0"), /object/);
 });
 
 test("artifact manifest records bytes and SHA-256", async () => {

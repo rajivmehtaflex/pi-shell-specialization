@@ -1,6 +1,6 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createInitialLedger, markPhaseDone, markPhaseWorking, readLedger, recoverStaleWorking, resetFailedPhase, writeLedgerAtomic } from "./phase-ledger.ts";
+import { createInitialLedger, markPhaseDone, markPhaseWorking, parsePhaseResultManifest, phaseResultManifestPath, readLedger, recoverStaleWorking, resetFailedPhase, writeLedgerAtomic, type PhaseResultManifest } from "./phase-ledger.ts";
 import { PHASE_DEFINITIONS, type ExecutionMode, type PhaseLedger, type PhaseRecord } from "./phase-types.ts";
 import type { RemoteExecutor, RemoteJob } from "./remote-executor.ts";
 
@@ -34,6 +34,7 @@ export type OrchestratorResult =
   | { kind: "blocked"; reason: string; ledger: PhaseLedger }
   | { kind: "working"; ledger: PhaseLedger }
   | { kind: "done"; ledger: PhaseLedger }
+  | { kind: "interrupted"; error: string; ledger: PhaseLedger }
   | { kind: "failed"; error: string; ledger: PhaseLedger };
 
 export interface PhaseOrchestratorOptions {
@@ -102,8 +103,11 @@ export class PhaseOrchestrator {
     const ledger = await this.initialize();
     for (const phase of ledger.phases) {
       if (phase.status === "pending") return this.runPhase(phase.id);
-      if (phase.status === "interrupted" && !phase.jobId) return this.runPhase(phase.id);
-      // Interrupted phases with a registered remote job are reconciled, never relaunched.
+      if (phase.status === "interrupted") {
+        if (phase.jobId && this.remote) return this.reconcilePhase(phase.id);
+        if (!phase.jobId) return this.runPhase(phase.id);
+      }
+      // Interrupted phases with a registered job but no remote executor cannot be reconciled here.
     }
     const unfinished = ledger.phases.filter((phase) => phase.status !== "done");
     if (!unfinished.length) return { kind: "done", ledger };
@@ -116,13 +120,15 @@ export class PhaseOrchestrator {
     const phase = this.phaseOrThrow(ledger, id);
     if (phase.status === "done") return { kind: "done", ledger };
     if (phase.status === "working") {
+      if (phase.jobId && this.remote) return this.reconcilePhase(id);
       throw new Error(`phase ${id} is already working${phase.jobId ? ` (job ${phase.jobId})` : ""}; resume or cancel before relaunching`);
     }
     if (phase.status === "failed") {
       throw new Error(`phase ${id} failed and will not be relaunched implicitly${phase.error ? ` (${phase.error})` : ""}; call retryPhase("${id}") to relaunch`);
     }
     if (phase.status === "interrupted" && phase.jobId) {
-      throw new Error(`phase ${id} is interrupted with registered job ${phase.jobId}; resume to reconcile it before relaunching`);
+      if (this.remote) return this.reconcilePhase(id);
+      throw new Error(`phase ${id} is interrupted with registered job ${phase.jobId} but no remote executor is configured; resume or cancel`);
     }
     if (phase.status === "blocked") throw new Error(`phase ${id} is blocked; resolve its blockers before running`);
     const dependencyReason = this.dependencyReason(ledger, id);
@@ -190,6 +196,82 @@ export class PhaseOrchestrator {
     }
   }
 
+  /**
+   * Polls the registered remote job for a phase and settles the ledger from its
+   * outcome (T5.4). A finished job only completes the phase when a valid result
+   * manifest (see `parsePhaseResultManifest`) exists at
+   * `state/runs/<phaseId>/result.json`; otherwise the phase stays interrupted
+   * with a nextAction explaining the missing manifest.
+   */
+  async reconcilePhase(id: string, options: { manifestPath?: string } = {}): Promise<OrchestratorResult> {
+    let ledger = await this.initialize();
+    const phase = this.phaseOrThrow(ledger, id);
+    if (phase.status === "done") return { kind: "done", ledger };
+    if (!phase.jobId) throw new Error(`phase ${id} has no registered remote job to reconcile`);
+    if (!this.remote) throw new Error(`no remote executor configured; cannot reconcile phase ${id} (job ${phase.jobId})`);
+    const job = await this.remote.status(phase.jobId);
+
+    if (job.status === "queued" || job.status === "running") {
+      phase.status = "working";
+      phase.error = undefined;
+      phase.nextAction = "poll remote job";
+      await writeLedgerAtomic(this.statePath, ledger);
+      return { kind: "working", ledger };
+    }
+    if (job.status === "unknown") {
+      phase.status = "interrupted";
+      phase.error = job.error ?? `remote job status unknown: ${phase.jobId}`;
+      phase.nextAction = "poll the remote job again once the host is reachable";
+      await writeLedgerAtomic(this.statePath, ledger);
+      return { kind: "interrupted", error: phase.error, ledger };
+    }
+    if (job.status === "failed" || job.status === "cancelled") {
+      phase.status = "failed";
+      const exit = job.exitCode !== undefined && job.exitCode !== null ? ` (exit ${job.exitCode})` : "";
+      phase.error = `remote job ${job.status}${exit}: ${job.error ?? phase.jobId}`;
+      phase.nextAction = `inspect remote logs and call retryPhase("${id}")`;
+      await writeLedgerAtomic(this.statePath, ledger);
+      return { kind: "failed", error: phase.error, ledger };
+    }
+
+    // job.status === "done": only a valid result manifest may complete the phase.
+    const manifestPath = options.manifestPath ?? phaseResultManifestPath(this.root, id);
+    let manifest: PhaseResultManifest;
+    try {
+      manifest = parsePhaseResultManifest(await readFile(manifestPath, "utf8"), id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      phase.status = "interrupted";
+      phase.error = `remote job ${phase.jobId} finished but its result manifest is unusable: ${detail}`;
+      phase.nextAction = `write a valid result manifest to ${manifestPath} and resume`;
+      await writeLedgerAtomic(this.statePath, ledger);
+      return { kind: "interrupted", error: phase.error, ledger };
+    }
+    if (manifest.status === "failed") {
+      phase.status = "failed";
+      phase.error = manifest.error ?? `result manifest reports failure for phase ${id}`;
+      phase.nextAction = `inspect ${manifestPath} and call retryPhase("${id}")`;
+      await writeLedgerAtomic(this.statePath, ledger);
+      return { kind: "failed", error: phase.error, ledger };
+    }
+    ledger = markPhaseDone(ledger, id, {
+      artifacts: manifest.artifacts.map((artifact) => artifact.path),
+      artifactHashes: Object.fromEntries(manifest.artifacts.map((artifact) => [artifact.path, artifact.sha256])),
+      now: this.now(),
+    });
+    const donePhase = this.phaseOrThrow(ledger, id);
+    donePhase.completedAt = manifest.completedAt;
+    donePhase.gpuSeconds = job.gpuSeconds ?? donePhase.gpuSeconds;
+    donePhase.actualCostUsd = job.actualCostUsd ?? donePhase.actualCostUsd;
+    await writeLedgerAtomic(this.statePath, ledger);
+    const doneCommit = await this.checkpoint("complete", donePhase, ["state/phase-ledger.json", ...donePhase.artifacts]);
+    if (doneCommit) {
+      donePhase.commit = doneCommit;
+      await writeLedgerAtomic(this.statePath, ledger);
+    }
+    return { kind: "done", ledger };
+  }
+
   /** Explicitly re-enables a failed phase and immediately relaunches it. */
   async retryPhase(id: string): Promise<OrchestratorResult> {
     let ledger = await this.initialize();
@@ -205,24 +287,14 @@ export class PhaseOrchestrator {
   async resume(): Promise<PhaseLedger> {
     let ledger = await this.initialize();
     ledger = recoverStaleWorking(ledger, this.now());
+    await writeLedgerAtomic(this.statePath, ledger);
     if (this.remote) {
       for (const phase of ledger.phases) {
         if (phase.status !== "interrupted" || !phase.jobId) continue;
-        const job = await this.remote.status(phase.jobId);
-        if (job.status === "running" || job.status === "queued") {
-          phase.status = "working";
-          phase.nextAction = "poll remote job";
-        } else if (job.status === "failed" || job.status === "cancelled") {
-          phase.status = "failed";
-          phase.error = `remote job ${job.status}: ${phase.jobId}`;
-          phase.nextAction = "inspect remote logs and rerun explicitly";
-        } else {
-          phase.status = "working";
-          phase.nextAction = "verify completed remote artifacts";
-        }
+        const result = await this.reconcilePhase(phase.id);
+        ledger = result.ledger;
       }
     }
-    await writeLedgerAtomic(this.statePath, ledger);
     return ledger;
   }
 

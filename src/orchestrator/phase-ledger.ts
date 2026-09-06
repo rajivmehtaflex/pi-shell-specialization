@@ -1,6 +1,68 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { PHASE_DEFINITIONS, type ExecutionMode, type PhaseLedger, type PhaseRecord } from "./phase-types.ts";
+
+/**
+ * Result manifest contract (T5.4): every remote phase job must publish one of
+ * these at `state/runs/<phaseId>/result.json` (relative to the project root)
+ * before the orchestrator will mark the phase done. Wave-3 phase scripts emit
+ * this file; `reconcilePhase` validates it against the ledger phase.
+ */
+export interface PhaseResultManifest {
+  phase: string;
+  status: "success" | "failed";
+  artifacts: Array<{ path: string; sha256: string }>;
+  completedAt: string;
+  error?: string;
+}
+
+export function phaseResultManifestPath(root: string, phaseId: string): string {
+  return join(root, "state", "runs", phaseId, "result.json");
+}
+
+const SHA256_PATTERN = /^[a-fA-F0-9]{64}$/;
+
+/** Parses and validates a raw result manifest against the expected phase id. */
+export function parsePhaseResultManifest(raw: string, expectedPhase: string): PhaseResultManifest {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error(`result manifest is not valid JSON for phase ${expectedPhase}`);
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`result manifest must be a JSON object for phase ${expectedPhase}`);
+  }
+  const item = value as Record<string, unknown>;
+  if (item.phase !== expectedPhase) {
+    throw new Error(`result manifest phase mismatch: expected ${expectedPhase} but found ${String(item.phase)}`);
+  }
+  if (item.status !== "success" && item.status !== "failed") {
+    throw new Error(`result manifest status must be "success" or "failed" for phase ${expectedPhase}`);
+  }
+  if (!Array.isArray(item.artifacts) || (item.status === "success" && item.artifacts.length === 0)) {
+    throw new Error(`result manifest artifacts must be a non-empty array for phase ${expectedPhase}`);
+  }
+  const artifacts = item.artifacts.map((entry) => {
+    if (typeof entry !== "object" || entry === null) throw new Error(`result manifest artifact must be an object for phase ${expectedPhase}`);
+    const artifact = entry as Record<string, unknown>;
+    if (typeof artifact.path !== "string" || !artifact.path.trim()) throw new Error(`result manifest artifact path missing for phase ${expectedPhase}`);
+    if (typeof artifact.sha256 !== "string" || !SHA256_PATTERN.test(artifact.sha256)) {
+      throw new Error(`result manifest artifact sha256 for ${artifact.path} is not a plausible 64-hex digest for phase ${expectedPhase}`);
+    }
+    return { path: artifact.path, sha256: artifact.sha256 };
+  });
+  if (typeof item.completedAt !== "string" || !item.completedAt.trim()) {
+    throw new Error(`result manifest completedAt missing for phase ${expectedPhase}`);
+  }
+  return {
+    phase: expectedPhase,
+    status: item.status,
+    artifacts,
+    completedAt: item.completedAt,
+    ...(typeof item.error === "string" && item.error ? { error: item.error } : {}),
+  };
+}
 
 export interface InitialLedgerOptions {
   mode: ExecutionMode;
@@ -70,7 +132,7 @@ export function markPhaseDone(
 ): PhaseLedger {
   const updated = cloneLedger(ledger, options.now);
   const phase = phaseOrThrow(updated, id);
-  if (phase.status !== "working") throw new Error(`phase is not working: ${id}`);
+  if (phase.status !== "working" && phase.status !== "interrupted") throw new Error(`phase is not completable: ${id} (${phase.status})`);
   phase.status = "done";
   phase.completedAt = options.now ?? new Date().toISOString();
   phase.artifacts = [...options.artifacts];
