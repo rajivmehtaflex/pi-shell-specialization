@@ -1,7 +1,9 @@
 import { BENCHMARK_CASES, validateBenchmarkCases } from "./cases.ts";
 import { registerDiagnosticTools, type DiagnosticToolOptions } from "./diagnostic-tools.ts";
 import { exportPublicQuestions } from "./question-export.ts";
+import { CheckpointCommitter } from "./orchestrator/checkpoint-commit.ts";
 import { registerOrchestrationTools } from "./orchestrator/orchestration-tools.ts";
+import { HfGitSync } from "./orchestrator/git-sync.ts";
 import { PhaseOrchestrator, type OrchestratorCheckpoint, type PhaseHandler } from "./orchestrator/orchestrator.ts";
 import type { ExecutionMode } from "./orchestrator/phase-types.ts";
 import type { RemoteExecutor } from "./orchestrator/remote-executor.ts";
@@ -46,6 +48,40 @@ export interface ShellSpecializationOptions extends DiagnosticToolOptions {
   checkpoint?: OrchestratorCheckpoint;
 }
 
+export interface OrchestrationWiring {
+  root: string;
+  mode: ExecutionMode;
+  handlers: Map<string, PhaseHandler>;
+  remote?: RemoteExecutor;
+  checkpoint?: OrchestratorCheckpoint;
+}
+
+export function resolveExecutionMode(explicit?: ExecutionMode): ExecutionMode {
+  return explicit ?? (process.env.WORKFLOW_MODE === "live" ? "live" : "dry-run");
+}
+
+/**
+ * Mode-correct orchestration wiring (T6.1):
+ * - live mode wires the configured SSH executor, its command handlers, and a
+ *   real git-backed checkpoint (HfGitSync + CheckpointCommitter);
+ * - dry-run mode wires neither an SSH executor nor SSH-backed handlers and
+ *   leaves the checkpoint unset so the orchestrator falls back to its
+ *   in-memory simulation checkpoint; a live executor can therefore never be
+ *   reached, even accidentally, from dry-run.
+ */
+export function buildOrchestrationWiring(options: ShellSpecializationOptions = {}): OrchestrationWiring {
+  const root = options.orchestrationRoot ?? process.env.PI_SPECIALIZATION_ROOT ?? process.cwd();
+  const mode = resolveExecutionMode(options.executionMode);
+  const remote = mode === "live" ? options.remoteExecutor ?? createConfiguredSshExecutor() : options.remoteExecutor;
+  const handlers = options.handlers ?? (remote ? createCommandHandlers(loadPhaseCommands(root), remote) : new Map());
+  let checkpoint = options.checkpoint;
+  if (!checkpoint && mode === "live") {
+    const committer = new CheckpointCommitter(new HfGitSync({ root }));
+    checkpoint = async (label, phase, paths) => (await committer.checkpoint(label, phase, paths)).commit;
+  }
+  return { root, mode, handlers, remote, checkpoint };
+}
+
 export function registerShellSpecialization(pi: { registerTool(tool: any): void; on?: (event: string, handler: (event: unknown, ctx: any) => Promise<void> | void) => void }, options: ShellSpecializationOptions = {}): void {
   pi.registerTool({
     name: "shell_benchmark_cases",
@@ -67,16 +103,13 @@ export function registerShellSpecialization(pi: { registerTool(tool: any): void;
   });
   registerDiagnosticTools(pi, options);
 
-  const root = options.orchestrationRoot ?? process.env.PI_SPECIALIZATION_ROOT ?? process.cwd();
-  const mode: ExecutionMode = options.executionMode ?? (process.env.WORKFLOW_MODE === "live" ? "live" : "dry-run");
-  const remoteExecutor = options.remoteExecutor ?? createConfiguredSshExecutor();
-  const handlers = options.handlers ?? (remoteExecutor ? createCommandHandlers(loadPhaseCommands(root), remoteExecutor) : new Map());
+  const wiring = buildOrchestrationWiring(options);
   const orchestrator = new PhaseOrchestrator({
-    root,
-    mode,
-    handlers,
-    remote: remoteExecutor,
-    checkpoint: options.checkpoint,
+    root: wiring.root,
+    mode: wiring.mode,
+    handlers: wiring.handlers,
+    remote: wiring.remote,
+    checkpoint: wiring.checkpoint,
   });
   registerOrchestrationTools(pi, { orchestrator });
   registerPhaseDashboard(pi, orchestrator);

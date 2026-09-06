@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInitialLedger } from "./phase-ledger.ts";
+import { CheckpointCommitter } from "./checkpoint-commit.ts";
 import { InMemoryRemoteExecutor, type RemoteExecutor, type RemoteJob } from "./remote-executor.ts";
 import { PhaseOrchestrator, type PhaseHandler } from "./orchestrator.ts";
 import { createCommandHandlers } from "./runtime-config.ts";
@@ -326,6 +328,90 @@ test("reconciliation fails a phase whose GPU usage exceeds twice the estimate", 
   assert.match(result.error ?? "", /GPU usage 300s exceeded 2x budget 200s/);
   assert.equal(result.ledger.phases[0].status, "failed");
   assert.notEqual(result.ledger.phases[0].status, "done");
+});
+
+test("live mode without a checkpoint implementation refuses to construct", () => {
+  const root = "/tmp/shell-orchestrator-live-no-checkpoint";
+  assert.throws(
+    () => new PhaseOrchestrator({ root, mode: "live", handlers: new Map() }),
+    /live mode requires a checkpoint implementation/,
+  );
+  // Dry-run keeps the in-memory simulation default and constructs fine.
+  const orchestrator = new PhaseOrchestrator({ root, mode: "dry-run", handlers: new Map() });
+  assert.ok(orchestrator.simulationCheckpoint);
+});
+
+test("live checkpoints flow through CheckpointCommitter to the git sync", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-committer-"));
+  const artifactContent = "profile\n";
+  await mkdir(dirname(join(root, "artifacts", "weakness_profile.json")), { recursive: true });
+  await writeFile(join(root, "artifacts", "weakness_profile.json"), artifactContent, "utf8");
+  const sha256 = createHash("sha256").update(artifactContent).digest("hex");
+  const commits: Array<{ message: string; paths: string[] }> = [];
+  let pushes = 0;
+  const sync = {
+    async commitPhase(_phase: unknown, paths: string[], message: string) {
+      commits.push({ message, paths: [...paths] });
+      return `commit-${commits.length}`;
+    },
+    async push() {
+      pushes += 1;
+    },
+  };
+  const committer = new CheckpointCommitter(sync);
+  const remote = staticRemote("done", { exitCode: 0 });
+  let launches = 0;
+  const handler: PhaseHandler = {
+    async run() {
+      launches += 1;
+      const job = await remote.status("unused");
+      return { status: "working", job: { ...job, id: "ssh-P0-live" }, nextAction: "poll remote job" };
+    },
+  };
+  const orchestrator = new PhaseOrchestrator({
+    root,
+    mode: "live",
+    handlers: new Map([["P0", handler]]),
+    remote,
+    checkpoint: async (label, phase, paths) => (await committer.checkpoint(label, phase, paths)).commit,
+    initialLedger: createInitialLedger({ mode: "live" }),
+  });
+  const working = await orchestrator.runPhase("P0");
+  assert.equal(working.kind, "working");
+  assert.equal(launches, 1);
+  await writeManifest(root, "P0", {
+    phase: "P0",
+    status: "success",
+    artifacts: [{ path: "artifacts/weakness_profile.json", sha256 }],
+    completedAt: "2026-09-06T10:00:00Z",
+  });
+  const done = await orchestrator.reconcilePhase("P0");
+  assert.equal(done.kind, "done");
+  assert.deepEqual(
+    commits.map((commit) => commit.message),
+    ["phase(P0): before-launch", "phase(P0): remote-job-registered", "phase(P0): complete"],
+  );
+  assert.deepEqual(commits[2].paths, ["state/phase-ledger.json", "artifacts/weakness_profile.json"]);
+  assert.equal(pushes, 3);
+  assert.equal(done.ledger.phases[0].commit, "commit-3");
+});
+
+test("dry-run default simulation checkpoint records labels and never commits", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-simcp-"));
+  const handler: PhaseHandler = {
+    async run() {
+      return { status: "done", artifacts: [], artifactHashes: {}, nextAction: "next" };
+    },
+  };
+  const orchestrator = new PhaseOrchestrator({ root, mode: "dry-run", handlers: new Map([["P0", handler]]), now: () => "2026-09-06T00:00:00Z" });
+  const result = await orchestrator.runPhase("P0");
+  assert.equal(result.kind, "done");
+  const simulation = orchestrator.simulationCheckpoint!;
+  assert.deepEqual(simulation.labels, ["before-launch", "complete"]);
+  assert.deepEqual(simulation.calls.map((call) => call.phaseId), ["P0", "P0"]);
+  assert.deepEqual(simulation.calls[0].paths, ["state/phase-ledger.json"]);
+  // Simulation checkpoints never produce commits or push anywhere.
+  assert.equal(result.ledger.phases.find((phase) => phase.id === "P0")?.commit, undefined);
 });
 
 test("dry-run orchestrator fails phases whose handlers target live executors", async () => {

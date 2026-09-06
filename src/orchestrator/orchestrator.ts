@@ -32,6 +32,31 @@ export interface PhaseHandler {
 
 export type OrchestratorCheckpoint = (label: string, phase: PhaseRecord, paths: string[]) => Promise<string | undefined>;
 
+export interface SimulationCheckpointCall {
+  label: string;
+  phaseId: string;
+  paths: string[];
+  at: string;
+}
+
+/**
+ * Dry-run default checkpoint (T6.1): records checkpoint labels in memory and
+ * never commits or pushes anywhere. Live mode refuses this default and requires
+ * a real checkpoint implementation (see the constructor guard).
+ */
+export class SimulationCheckpoint {
+  readonly calls: SimulationCheckpointCall[] = [];
+
+  get labels(): string[] {
+    return this.calls.map((call) => call.label);
+  }
+
+  async checkpoint(label: string, phase: PhaseRecord, paths: string[]): Promise<string | undefined> {
+    this.calls.push({ label, phaseId: phase.id, paths: [...paths], at: new Date().toISOString() });
+    return undefined;
+  }
+}
+
 export type OrchestratorResult =
   | { kind: "blocked"; reason: string; ledger: PhaseLedger }
   | { kind: "working"; ledger: PhaseLedger }
@@ -58,13 +83,25 @@ export class PhaseOrchestrator {
   private readonly remote?: RemoteExecutor;
   private readonly now: () => string;
   private readonly initialLedger?: PhaseLedger;
+  /** Set only when dry-run fell back to the in-memory simulation checkpoint. */
+  readonly simulationCheckpoint?: SimulationCheckpoint;
 
   constructor(options: PhaseOrchestratorOptions) {
     this.root = options.root;
     this.statePath = join(options.root, "state", "phase-ledger.json");
     this.mode = options.mode;
     this.handlers = options.handlers;
-    this.checkpoint = options.checkpoint ?? (async () => undefined);
+    if (options.checkpoint) {
+      this.checkpoint = options.checkpoint;
+    } else if (this.mode === "live") {
+      // Silent no-op checkpoints would let live phases complete without any
+      // durable record; refuse to run live without a real implementation.
+      throw new Error("live mode requires a checkpoint implementation");
+    } else {
+      const simulation = new SimulationCheckpoint();
+      this.simulationCheckpoint = simulation;
+      this.checkpoint = (label, phase, paths) => simulation.checkpoint(label, phase, paths);
+    }
     this.remote = options.remote;
     this.now = options.now ?? (() => new Date().toISOString());
     this.initialLedger = options.initialLedger;
