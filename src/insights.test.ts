@@ -107,3 +107,15 @@ test("homogeneous cohorts pass with derived or explicit labels", () => {
   assert.equal(explicit.model, "qwen3.5:9b");
   assert.equal(explicit.track, "raw");
 });
+
+test("a later pass after a protocol-failed first attempt cannot push pass@N above 100%", () => {
+  const profile = buildWeaknessProfile([
+    record("bash-001", false, "I cannot provide a script.", 1),
+    record("bash-001", true, "```bash\ntrue\n```", 2),
+    record("bash-002", true, "```bash\ntrue\n```", 1),
+  ], { model: "m", track: "raw" });
+  const insight = profile.categories[0];
+  assert.ok(insight.passAtN <= 1, `passAtN must stay within [0, 1], got ${insight.passAtN}`);
+  assert.equal(insight.passAtN, 1);
+  assert.equal(insight.protocolFailures, 1);
+});

@@ -207,9 +207,11 @@ export function buildWeaknessProfile(records: ExternalAttemptRecord[], options: 
     const capability = unique.filter((attempt) => !attempt.protocolFailure && !attempt.evaluatorFailure);
     const successes = capability.filter((attempt) => attempt.score.passed).length;
     const passRate = rate(successes, capability.length);
-    const laterSuccesses = new Set(
+    const eligibleCaseIds = new Set(capability.map((attempt) => attempt.record.case_id));
+    const passingCaseIds = new Set(
       all.filter((attempt) => !attempt.protocolFailure && !attempt.evaluatorFailure && attempt.score.passed).map((attempt) => attempt.record.case_id),
-    ).size;
+    );
+    const laterSuccesses = [...eligibleCaseIds].filter((caseId) => passingCaseIds.has(caseId)).length;
     const evidence = failureEvidence(all);
     const repeatedLabel = [...evidence.cases.values()].some((affected) => affected.size >= 2) || [...evidence.attempts.values()].some((keys) => keys.size >= 2);
     const repeatedCaseFailure = [...new Set(all.map((attempt) => attempt.record.case_id))].some((caseId) =>
