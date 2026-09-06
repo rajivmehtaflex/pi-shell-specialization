@@ -11,13 +11,23 @@ export interface JobSpec {
 export interface RemoteJob {
   id: string;
   phase: string;
-  status: "queued" | "running" | "done" | "failed" | "cancelled";
+  status: "queued" | "running" | "done" | "failed" | "cancelled" | "unknown";
   gpuSeconds?: number;
   estimatedCostUsd: number;
   actualCostUsd?: number;
   artifacts: string[];
   logsUrl?: string;
   simulation?: boolean;
+  /** Exit code recorded by the remote wrapper; null while the job has not finished. */
+  exitCode?: number | null;
+  /** Human-readable failure reason (nonzero exit, lost markers, or transport failure). */
+  error?: string;
+  /** ISO-8601 UTC timestamp at which the wrapper observed job completion. */
+  finishedAt?: string;
+  /** Path to the job's primary output file (populated by a later verification wave). */
+  resultPath?: string;
+  /** Artifact paths whose sha256 has been verified remotely (populated by a later wave). */
+  verifiedArtifacts?: Array<{ path: string; sha256: string }>;
 }
 
 export interface RemoteExecutor {
