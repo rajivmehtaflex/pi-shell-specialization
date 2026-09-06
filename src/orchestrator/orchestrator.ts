@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createArtifactManifest, recordArtifact, verifyLedgerArtifacts, type ArtifactVerificationIssue } from "./artifact-manifest.ts";
 import { createInitialLedger, markPhaseDone, markPhaseWorking, parsePhaseResultManifest, phaseResultManifestPath, readLedger, recoverStaleWorking, resetFailedPhase, writeLedgerAtomic, type PhaseResultManifest } from "./phase-ledger.ts";
 import { PHASE_DEFINITIONS, type ExecutionMode, type PhaseLedger, type PhaseRecord } from "./phase-types.ts";
 import { enforceGpuBudget, enforceJobCost } from "./modal-jobs.ts";
@@ -209,7 +210,7 @@ export class PhaseOrchestrator {
 
       ledger = markPhaseDone(ledger, id, {
         artifacts: result.artifacts ?? [],
-        artifactHashes: result.artifactHashes ?? {},
+        artifactHashes: await this.resolveArtifactHashes(id, result),
         nextAction: result.nextAction,
         now: this.now(),
       });
@@ -235,6 +236,31 @@ export class PhaseOrchestrator {
       await writeLedgerAtomic(this.statePath, ledger);
       return { kind: "failed", error: failed.error, ledger };
     }
+  }
+
+  /**
+   * Every completion path must persist sha256s (T6.3). Handlers that declare
+   * artifacts without hashes (e.g. local non-remote completions) are routed
+   * through artifact-manifest's `recordArtifact`, which hashes the file at its
+   * repo-root-relative path. A declared artifact that cannot be read fails the
+   * phase instead of completing without a durable hash.
+   */
+  private async resolveArtifactHashes(phaseId: string, result: PhaseHandlerResult): Promise<Record<string, string>> {
+    const hashes: Record<string, string> = { ...(result.artifactHashes ?? {}) };
+    const unhashed = (result.artifacts ?? []).filter((artifactPath) => !hashes[artifactPath]);
+    if (!unhashed.length) return hashes;
+    let manifest = createArtifactManifest(this.mode, this.now());
+    for (const artifactPath of unhashed) {
+      const absolute = join(this.root, ...artifactPath.split("/"));
+      try {
+        manifest = await recordArtifact(manifest, absolute, { phase: phaseId, storage: "local", relativePath: artifactPath, simulation: this.mode === "dry-run", now: this.now() });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`artifact ${artifactPath} could not be hashed (${detail}); sha256s must be persisted for every completed phase`);
+      }
+      hashes[artifactPath] = manifest.artifacts.find((entry) => entry.path === artifactPath)!.sha256;
+    }
+    return hashes;
   }
 
   /** Returns a violation message when a terminal job's GPU usage blew past 2x the estimate. */
@@ -317,6 +343,8 @@ export class PhaseOrchestrator {
       await writeLedgerAtomic(this.statePath, ledger);
       return { kind: "failed", error: phase.error, ledger };
     }
+    // Record which artifacts the remote job delivered with verified digests (T6.3).
+    job.verifiedArtifacts = manifest.artifacts.map((artifact) => ({ ...artifact }));
     ledger = markPhaseDone(ledger, id, {
       artifacts: manifest.artifacts.map((artifact) => artifact.path),
       artifactHashes: Object.fromEntries(manifest.artifacts.map((artifact) => [artifact.path, artifact.sha256])),
@@ -347,15 +375,71 @@ export class PhaseOrchestrator {
     return this.runPhase(id);
   }
 
+  /**
+   * Recovery sequence (T6.3), in order:
+   *  1. load the persisted ledger;
+   *  2. recover stale working phases to interrupted;
+   *  3. reconcile interrupted phases that have saved remote jobs (poll status,
+   *     read result manifests, mark done/failed);
+   *  4. verify artifact hashes of every done phase against the files on disk;
+   *  5. mark phases with verification failures as failed with
+   *     `artifact hash mismatch: <path>`;
+   *  6. checkpoint the recovered ledger once (label "recovery").
+   *
+   * Deliberate policy: on verification failure the affected phases are marked
+   * failed and persisted, the corrupted state is NEVER checkpointed, and
+   * recovery then throws so the operator sees the corruption. The error is
+   * thrown after marking, not before, so the failure is durable.
+   */
   async resume(): Promise<PhaseLedger> {
+    // 1. load ledger
     let ledger = await this.initialize();
+    const statusesBefore = new Map(ledger.phases.map((phase) => [phase.id, phase.status]));
+    // 2. recover stale working phases
     ledger = recoverStaleWorking(ledger, this.now());
     await writeLedgerAtomic(this.statePath, ledger);
+    // 3. reconcile interrupted phases with saved remote jobs
     if (this.remote) {
       for (const phase of ledger.phases) {
         if (phase.status !== "interrupted" || !phase.jobId) continue;
         const result = await this.reconcilePhase(phase.id);
         ledger = result.ledger;
+      }
+    }
+    // 4. verify artifact hashes for all done phases
+    const issues: ArtifactVerificationIssue[] = await verifyLedgerArtifacts(this.root, ledger);
+    if (issues.length) {
+      // 5. mark verification failures (never checkpointed)
+      const firstIssueByPhase = new Map<string, ArtifactVerificationIssue>();
+      for (const issue of issues) {
+        if (!firstIssueByPhase.has(issue.phase)) firstIssueByPhase.set(issue.phase, issue);
+      }
+      for (const [phaseId, issue] of firstIssueByPhase) {
+        const failed = ledger.phases.find((candidate) => candidate.id === phaseId);
+        if (!failed) continue;
+        failed.status = "failed";
+        failed.error = issue.reason === "missing"
+          ? `artifact hash mismatch: ${issue.path} (file missing)`
+          : `artifact hash mismatch: ${issue.path}`;
+        failed.nextAction = `restore ${issue.path} (expected sha256 ${issue.expectedSha256}) before resuming`;
+      }
+      await writeLedgerAtomic(this.statePath, ledger);
+      const detail = [...firstIssueByPhase.values()]
+        .map((issue) => `artifact hash mismatch: ${issue.path}${issue.reason === "missing" ? " (file missing)" : ""} in phase ${issue.phase}`)
+        .join("; ");
+      throw new Error(`resume aborted: ${detail} (affected phases were marked failed; corrupted state was not checkpointed)`);
+    }
+    await writeLedgerAtomic(this.statePath, ledger);
+    // 6. checkpoint the recovered state, but only when recovery changed something
+    let lastChanged: PhaseRecord | undefined;
+    for (const phase of ledger.phases) {
+      if (statusesBefore.get(phase.id) !== phase.status) lastChanged = phase;
+    }
+    if (lastChanged) {
+      const recoveryCommit = await this.checkpoint("recovery", lastChanged, ["state/phase-ledger.json"]);
+      if (recoveryCommit) {
+        lastChanged.commit = recoveryCommit;
+        await writeLedgerAtomic(this.statePath, ledger);
       }
     }
     return ledger;

@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { createInitialLedger } from "./phase-ledger.ts";
+import { createInitialLedger, readLedger } from "./phase-ledger.ts";
 import { CheckpointCommitter } from "./checkpoint-commit.ts";
 import { InMemoryRemoteExecutor, type RemoteExecutor, type RemoteJob } from "./remote-executor.ts";
 import { PhaseOrchestrator, type PhaseHandler } from "./orchestrator.ts";
@@ -178,7 +178,7 @@ test("runNext skips done phases and never relaunches them", async () => {
   const handler: PhaseHandler = {
     async run({ phase }) {
       launches += 1;
-      return { status: "done", artifacts: [`artifacts/${phase.id}.json`], artifactHashes: {}, nextAction: "next" };
+      return { status: "done", artifacts: [`artifacts/${phase.id}.json`], artifactHashes: { [`artifacts/${phase.id}.json`]: VALID_SHA }, nextAction: "next" };
     },
   };
   const orchestrator = new PhaseOrchestrator({ root, mode: "dry-run", handlers: new Map([["P0", handler]]), checkpoint: async () => undefined });
@@ -304,18 +304,32 @@ test("reconcilePhase maps failed remote jobs to failed phases with the exit code
 test("resume() reconciles interrupted phases end-to-end through saved jobs", async () => {
   const root = await mkdtemp(join("/tmp", "shell-orchestrator-resume-manifest-"));
   const remote = staticRemote("done", { exitCode: 0, finishedAt: "2026-09-06T09:30:00Z" });
+  const artifactContent = "profile\n";
+  await mkdir(dirname(join(root, "artifacts", "weakness_profile.json")), { recursive: true });
+  await writeFile(join(root, "artifacts", "weakness_profile.json"), artifactContent, "utf8");
+  const artifactSha = createHash("sha256").update(artifactContent).digest("hex");
+  const labels: string[] = [];
   await writeManifest(root, "P0", {
     phase: "P0",
     status: "success",
-    artifacts: [{ path: "artifacts/weakness_profile.json", sha256: VALID_SHA }],
+    artifacts: [{ path: "artifacts/weakness_profile.json", sha256: artifactSha }],
     completedAt: "2026-09-06T09:30:00Z",
   });
-  const orchestrator = new PhaseOrchestrator({ root, mode: "live", handlers: new Map(), remote, initialLedger: interruptedLedger(), checkpoint: async () => undefined });
+  const orchestrator = new PhaseOrchestrator({
+    root,
+    mode: "live",
+    handlers: new Map(),
+    remote,
+    initialLedger: interruptedLedger(),
+    checkpoint: async (label) => { labels.push(label); return `commit-${labels.length}`; },
+  });
   const resumed = await orchestrator.resume();
   const phase = resumed.phases[0];
   assert.equal(phase.status, "done");
   assert.deepEqual(phase.artifacts, ["artifacts/weakness_profile.json"]);
   assert.equal(remote.polls(), 1);
+  // The recovered ledger is checkpointed: the reconciled "complete" plus the resume-level "recovery".
+  assert.deepEqual(labels, ["complete", "recovery"]);
   await assert.rejects(() => orchestrator.reconcilePhase("P2.1"), /no registered remote job/);
 });
 
@@ -433,4 +447,156 @@ test("dry-run orchestrator fails phases whose handlers target live executors", a
   assert.equal(result.kind, "failed");
   assert.match(result.error ?? "", /dry-run mode cannot launch live jobs/);
   assert.equal(launches, 0);
+});
+
+test("resume aborts recovery when a done phase's artifact hash no longer matches", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-tamper-"));
+  const original = "train,row\n";
+  await mkdir(dirname(join(root, "data", "teacher_train.jsonl")), { recursive: true });
+  await writeFile(join(root, "data", "teacher_train.jsonl"), original, "utf8");
+  const realSha = createHash("sha256").update(original).digest("hex");
+  const ledger = createInitialLedger({ mode: "live" });
+  const phase = ledger.phases[0];
+  phase.status = "done";
+  phase.completedAt = "2026-09-06T09:00:00Z";
+  phase.artifacts = ["data/teacher_train.jsonl"];
+  phase.artifactHashes = { "data/teacher_train.jsonl": realSha };
+  const labels: string[] = [];
+  const orchestrator = new PhaseOrchestrator({
+    root,
+    mode: "live",
+    handlers: new Map(),
+    initialLedger: ledger,
+    checkpoint: async (label) => { labels.push(label); return `commit-${labels.length}`; },
+  });
+  await writeFile(join(root, "data", "teacher_train.jsonl"), "tampered\n", "utf8");
+  await assert.rejects(() => orchestrator.resume(), /artifact hash mismatch: data\/teacher_train\.jsonl/);
+  const onDisk = await readLedger(join(root, "state", "phase-ledger.json"));
+  const failedPhase = onDisk.phases.find((candidate) => candidate.id === "P0");
+  assert.equal(failedPhase?.status, "failed");
+  assert.match(failedPhase?.error ?? "", /artifact hash mismatch: data\/teacher_train\.jsonl/);
+  assert.equal(labels.length, 0);
+});
+
+test("resume aborts recovery when a recorded artifact file is missing entirely", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-missing-artifact-"));
+  const ledger = createInitialLedger({ mode: "live" });
+  const phase = ledger.phases[0];
+  phase.status = "done";
+  phase.completedAt = "2026-09-06T09:00:00Z";
+  phase.artifacts = ["data/ghost.jsonl"];
+  phase.artifactHashes = { "data/ghost.jsonl": VALID_SHA };
+  const orchestrator = new PhaseOrchestrator({ root, mode: "live", handlers: new Map(), initialLedger: ledger, checkpoint: async () => undefined });
+  await assert.rejects(() => orchestrator.resume(), /artifact hash mismatch: data\/ghost\.jsonl/);
+  const onDisk = await readLedger(join(root, "state", "phase-ledger.json"));
+  const failedPhase = onDisk.phases.find((candidate) => candidate.id === "P0");
+  assert.equal(failedPhase?.status, "failed");
+  assert.match(failedPhase?.error ?? "", /artifact hash mismatch: data\/ghost\.jsonl/);
+});
+
+test("restarting after a saved completed job does not rerun the work and fills verifiedArtifacts", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-norerun-"));
+  const content = "profile\n";
+  await mkdir(dirname(join(root, "artifacts", "weakness_profile.json")), { recursive: true });
+  await writeFile(join(root, "artifacts", "weakness_profile.json"), content, "utf8");
+  const sha = createHash("sha256").update(content).digest("hex");
+  await writeManifest(root, "P0", {
+    phase: "P0",
+    status: "success",
+    artifacts: [{ path: "artifacts/weakness_profile.json", sha256: sha }],
+    completedAt: "2026-09-06T12:00:00Z",
+  });
+  let launches = 0;
+  const job: RemoteJob = { id: "ssh-P0-saved", phase: "P0", status: "done", exitCode: 0, estimatedCostUsd: 0, artifacts: ["artifacts/weakness_profile.json"] };
+  const remote: RemoteExecutor = {
+    simulationSafe: false,
+    async launch() {
+      launches += 1;
+      throw new Error("must not relaunch a saved completed job");
+    },
+    async status() {
+      return job;
+    },
+    async cancel() {},
+    async logs() {
+      return "";
+    },
+  };
+  const orchestrator = new PhaseOrchestrator({ root, mode: "live", handlers: new Map(), remote, initialLedger: interruptedLedger(), checkpoint: async () => undefined });
+  const resumed = await orchestrator.resume();
+  assert.equal(launches, 0);
+  assert.equal(resumed.phases[0].status, "done");
+  assert.deepEqual(resumed.phases[0].artifacts, ["artifacts/weakness_profile.json"]);
+  assert.equal(resumed.phases[0].artifactHashes["artifacts/weakness_profile.json"], sha);
+  assert.deepEqual(job.verifiedArtifacts, [{ path: "artifacts/weakness_profile.json", sha256: sha }]);
+  const again = await orchestrator.resume();
+  assert.equal(again.phases[0].status, "done");
+  assert.equal(launches, 0);
+});
+
+test("every live transition fires the checkpoint callback exactly with persisted state", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-recovery-cp-"));
+  const artifactContent = "train,row\n";
+  await mkdir(dirname(join(root, "data", "teacher_train.jsonl")), { recursive: true });
+  await writeFile(join(root, "data", "teacher_train.jsonl"), artifactContent, "utf8");
+  const artifactSha = createHash("sha256").update(artifactContent).digest("hex");
+  const observed: Array<{ label: string; diskStatus?: string; paths: string[] }> = [];
+  const remote = staticRemote("done", { exitCode: 0 });
+  const orchestrator = new PhaseOrchestrator({
+    root,
+    mode: "live",
+    handlers: new Map(),
+    remote,
+    initialLedger: interruptedLedger(),
+    checkpoint: async (label, phase, paths) => {
+      const disk = JSON.parse(await readFile(join(root, "state", "phase-ledger.json"), "utf8")) as PhaseLedger;
+      observed.push({ label, diskStatus: disk.phases.find((candidate) => candidate.id === phase.id)?.status, paths: [...paths] });
+      return `commit-${observed.length}`;
+    },
+  });
+  await writeManifest(root, "P0", {
+    phase: "P0",
+    status: "success",
+    artifacts: [{ path: "data/teacher_train.jsonl", sha256: artifactSha }],
+    completedAt: "2026-09-06T11:00:00Z",
+  });
+  const ledger = await orchestrator.resume();
+  assert.equal(ledger.phases[0].status, "done");
+  assert.deepEqual(observed.map((entry) => entry.label), ["complete", "recovery"]);
+  assert.equal(observed[0].diskStatus, "done");
+  assert.deepEqual(observed[0].paths, ["state/phase-ledger.json", "data/teacher_train.jsonl"]);
+  assert.equal(observed[1].diskStatus, "done");
+  assert.deepEqual(observed[1].paths, ["state/phase-ledger.json"]);
+  assert.equal(ledger.phases[0].commit, "commit-2");
+});
+
+test("runPhase persists sha256 hashes via the artifact manifest when handlers omit them", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-localhash-"));
+  const content = "{\"a\":1}\n";
+  await mkdir(dirname(join(root, "artifacts", "local.json")), { recursive: true });
+  await writeFile(join(root, "artifacts", "local.json"), content, "utf8");
+  const expected = createHash("sha256").update(content).digest("hex");
+  const handler: PhaseHandler = {
+    async run() {
+      return { status: "done", artifacts: ["artifacts/local.json"], nextAction: "next" };
+    },
+  };
+  const orchestrator = new PhaseOrchestrator({ root, mode: "dry-run", handlers: new Map([["P0", handler]]), checkpoint: async () => undefined });
+  const result = await orchestrator.runPhase("P0");
+  assert.equal(result.kind, "done");
+  assert.equal(result.ledger.phases.find((phase) => phase.id === "P0")?.artifactHashes["artifacts/local.json"], expected);
+});
+
+test("runPhase fails a phase whose handler declares artifacts that cannot be hashed", async () => {
+  const root = await mkdtemp(join("/tmp", "shell-orchestrator-ghost-artifact-"));
+  const handler: PhaseHandler = {
+    async run() {
+      return { status: "done", artifacts: ["artifacts/ghost.json"], nextAction: "next" };
+    },
+  };
+  const orchestrator = new PhaseOrchestrator({ root, mode: "dry-run", handlers: new Map([["P0", handler]]), checkpoint: async () => undefined });
+  const result = await orchestrator.runPhase("P0");
+  assert.equal(result.kind, "failed");
+  assert.match(result.error ?? "", /artifacts\/ghost\.json/);
+  assert.equal(result.ledger.phases.find((phase) => phase.id === "P0")?.status, "failed");
 });
