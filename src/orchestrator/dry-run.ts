@@ -95,7 +95,7 @@ export async function runDryRun(options: DryRunOptions): Promise<DryRunResult> {
 
   // Real split flow (same algorithm as workers/split.py) over the verified
   // envelope rows, then the real dataset gate in dry-run mode.
-  const split = splitDatasetRows(verifiedRows, { seed: 42, holdoutCount: 1, trainRatio: 0.7 });
+  const split = splitDatasetRows(verifiedRows, { seed: 42, holdoutCount: 1, evalCount: 1, minimumRows: 0 });
   splitCounts = datasetCountsFromSplit("dry-run", split);
   datasetGate = evaluateDatasetGate(splitCounts);
   const audit = {

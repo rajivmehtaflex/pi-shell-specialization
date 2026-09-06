@@ -26,7 +26,9 @@ export interface DatasetSplit<T> {
 export interface SplitDatasetOptions {
   seed?: number;
   holdoutCount?: number;
-  trainRatio?: number;
+  evalCount?: number;
+  /** Minimum accepted input rows; the production gate needs 1800+250+250. */
+  minimumRows?: number;
 }
 
 function splitKey(row: unknown): string {
@@ -42,61 +44,79 @@ function orderedByHashedKey<T>(rows: T[], seed: number): T[] {
   return hashed.map((entry) => entry.row);
 }
 
-/** Max category share minus min category share across the rows (0 when one category). */
-export function balanceDeltaOf(rows: ReadonlyArray<object>): number {
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    const record = row as Record<string, unknown>;
-    const task = record.task;
-    const category = typeof record.category === "string"
-      ? record.category
-      : (typeof task === "object" && task !== null && typeof (task as Record<string, unknown>).category === "string"
-        ? (task as Record<string, unknown>).category as string
-        : "unknown");
-    counts.set(category, (counts.get(category) ?? 0) + 1);
+function categoryOf(row: object): string {
+  const record = row as Record<string, unknown>;
+  const task = record.task;
+  if (typeof record.category === "string") return record.category;
+  if (typeof task === "object" && task !== null && typeof (task as Record<string, unknown>).category === "string") {
+    return (task as Record<string, unknown>).category as string;
   }
-  if (counts.size <= 1) return 0;
-  const shares = [...counts.values()].map((count) => count / rows.length);
-  return Math.max(...shares) - Math.min(...shares);
+  return "unknown";
+}
+
+function categoryShares(rows: ReadonlyArray<object>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(categoryOf(row), (counts.get(categoryOf(row)) ?? 0) + 1);
+  const shares = new Map<string, number>();
+  for (const [category, count] of counts) shares.set(category, count / Math.max(rows.length, 1));
+  return shares;
+}
+
+/**
+ * Worst absolute category-share deviation |share in split − share overall|,
+ * maximised over categories and over the eval and holdout splits — the same
+ * definition workers/split.py emits; the production gate requires <= 0.1.
+ */
+export function splitBalanceDelta(train: ReadonlyArray<object>, evalRows: ReadonlyArray<object>, holdout: ReadonlyArray<object>): number {
+  const overall = categoryShares([...train, ...evalRows, ...holdout]);
+  let worst = 0;
+  for (const split of [evalRows, holdout]) {
+    if (split.length === 0) continue;
+    const shares = categoryShares(split);
+    for (const [category, overallShare] of overall) {
+      worst = Math.max(worst, Math.abs((shares.get(category) ?? 0) - overallShare));
+    }
+  }
+  return worst;
 }
 
 /**
  * Deterministic dataset split mirroring workers/split.py: rows are ordered by
  * sha256(`${seed}:${task_id}`), the last holdoutCount rows become the holdout,
- * and the remaining rows are divided by trainRatio. Produces the same split
- * result shape the worker emits: { train, eval, holdout, balanceDelta }.
+ * the preceding evalCount rows become eval, and train takes the remainder.
+ * Produces the same split result shape the worker emits:
+ * { train, eval, holdout, balanceDelta }.
  */
 export function splitDatasetRows<T extends object>(rows: T[], options: SplitDatasetOptions = {}): DatasetSplit<T> {
   const seed = options.seed ?? 42;
   const holdoutCount = options.holdoutCount ?? 250;
-  const trainRatio = options.trainRatio ?? 0.7;
+  const evalCount = options.evalCount ?? 250;
+  const minimumRows = options.minimumRows ?? 2300;
   if (!Number.isInteger(holdoutCount) || holdoutCount < 1) throw new Error("holdoutCount must be a positive integer");
-  if (rows.length <= holdoutCount) throw new Error(`input must contain more rows than holdout_count (${holdoutCount})`);
+  if (!Number.isInteger(evalCount) || evalCount < 1) throw new Error("evalCount must be a positive integer");
+  if (rows.length < minimumRows) throw new Error(`input must contain at least ${minimumRows} accepted rows`);
   const ordered = orderedByHashedKey(rows, seed);
   const holdout = ordered.slice(-holdoutCount);
-  const remaining = ordered.slice(0, ordered.length - holdoutCount);
-  const trainCount = Math.round(remaining.length * trainRatio);
-  const train = remaining.slice(0, trainCount);
-  const evalRows = remaining.slice(trainCount);
-  return { train, eval: evalRows, holdout, balanceDelta: balanceDeltaOf([...train, ...evalRows, ...holdout]) };
+  const evalRows = ordered.slice(Math.max(ordered.length - holdoutCount - evalCount, 0), ordered.length - holdoutCount);
+  const train = ordered.slice(0, Math.max(ordered.length - holdoutCount - evalCount, 0));
+  return { train, eval: evalRows, holdout, balanceDelta: splitBalanceDelta(train, evalRows, holdout) };
 }
 
 /**
  * Builds DatasetCounts from a split result (the shape workers/split.py emits,
  * rows keyed by task_id). Reads balanceDelta when present and otherwise falls
- * back to computing it from the rows.
+ * back to computing it from the three split parts.
  */
 export function datasetCountsFromSplit(
   mode: ExecutionMode,
   split: { train: unknown[]; eval: unknown[]; holdout: unknown[]; balanceDelta?: number },
 ): DatasetCounts {
-  const allRows = [...split.train, ...split.eval, ...split.holdout].map((row) => (typeof row === "object" && row !== null ? row as Record<string, unknown> : {}));
   return {
     mode,
     train: split.train.length,
     eval: split.eval.length,
     holdout: split.holdout.length,
-    balanceDelta: typeof split.balanceDelta === "number" ? split.balanceDelta : balanceDeltaOf(allRows),
+    balanceDelta: typeof split.balanceDelta === "number" ? split.balanceDelta : splitBalanceDelta(split.train as object[], split.eval as object[], split.holdout as object[]),
   };
 }
 
